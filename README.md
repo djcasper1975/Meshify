@@ -1,14 +1,12 @@
-MeshChat is an ESP32 based wifi mesh chat that uses html.
-Just conect your device and goto mesh.local in your brower.
-This is system could be useful to remain in contact with friends in the same building or even further depending on setup and amount of nodes used.
-Nothings stable right now and needs more work but for now people can use it.
-If you want your own private mesh then just ass a wifi password.
-All nodes must have the same name to mesh together automaticly if in range.
-If you want to try make a larger public mesh then leave the wifi settings as they are ands use without changing anything before flashing to youyr esp32.
-Thats it for now.
+MeshChat is an ESP32-based WiFi mesh chat system that uses HTML. Just connect your device and go to mesh.local in your browser.
 
-Hope its useful to some extent.
-Thx for testing.
+This system could be useful for staying in contact with friends within the same building or even further, depending on the setup and the number of nodes used. It's not entirely stable at the moment and needs more work, but it is available for use now.
+
+If you want your own private mesh, simply add a WiFi password. All nodes must have the same name to automatically mesh together when in range. If you'd like to create a larger public mesh, leave the WiFi settings as they are and use the system without changing anything before flashing it to your ESP32.
+
+That's it for now.
+
+I hope it's useful to some extent. Thanks for testing!
 
 Mark Coultous (djcasper1975)
-https://github.com/djcasper1975
+GitHub: djcasper1975
