@@ -2,7 +2,6 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
-#include <ESPmDNS.h> // Include mDNS library
 
 #define MESH_SSID "MeshChat 1.0"
 #define MESH_PASSWORD ""
@@ -40,39 +39,23 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
 </style>
 <script>
 function fetchData() {
-  fetch('/messages')
-    .then(response => response.json())
-    .then(data => {
-      const ul = document.getElementById('messageList');
-      ul.innerHTML = data.messages.map(msg => `<li>${msg.sender}: ${msg.message}</li>`).join('');
-    })
-    .catch(error => {
-      console.error('Failed to fetch messages, reloading...', error);
-      setTimeout(() => location.reload(), 2000); // Reload page if fetching fails
-    });
-
-  fetch('/deviceCount')
-    .then(response => response.json())
-    .then(data => {
-      document.getElementById('deviceCount').textContent = 'Mesh Nodes: ' + data.totalCount;
-    })
-    .catch(error => {
-      console.error('Failed to fetch device count, reloading...', error);
-      setTimeout(() => location.reload(), 2000); // Reload page if fetching fails
-    });
+  fetch('/messages').then(response => response.json()).then(data => {
+    const ul = document.getElementById('messageList');
+    ul.innerHTML = data.messages.map(msg => `<li>${msg.sender}: ${msg.message}</li>`).join('');
+  });
+  fetch('/deviceCount').then(response => response.json()).then(data => {
+    document.getElementById('deviceCount').textContent = 'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + data.nodeId;
+  });
 }
-
 window.onload = function() {
   loadName();
   fetchData();
   setInterval(fetchData, 10000);
 };
-
 function saveName() {
   const nameInput = document.getElementById('nameInput');
   localStorage.setItem('username', nameInput.value);
 }
-
 function loadName() {
   const savedName = localStorage.getItem('username');
   if (savedName) {
@@ -110,19 +93,12 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 </style>
 <script>
 function fetchNodes() {
-  fetch('/nodesData')
-    .then(response => response.json())
-    .then(data => {
-      const ul = document.getElementById('nodeList');
-      ul.innerHTML = data.nodes.map(node => `<li>${node}</li>`).join('');
-      document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
-    })
-    .catch(error => {
-      console.error('Failed to fetch nodes data, reloading...', error);
-      setTimeout(() => location.reload(), 2000); // Reload page if fetching fails
-    });
+  fetch('/nodesData').then(response => response.json()).then(data => {
+    const ul = document.getElementById('nodeList');
+    ul.innerHTML = data.nodes.map(node => `<li>${node}</li>`).join('');
+    document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
+  });
 }
-
 window.onload = function() {
   fetchNodes();
   setInterval(fetchNodes, 10000); // Refresh every 10 seconds
@@ -164,13 +140,6 @@ void setup() {
   WiFi.mode(WIFI_AP);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
 
-  // Start mDNS responder with the hostname "mesh"
-  if (!MDNS.begin("mesh")) {
-    Serial.println("Error starting mDNS responder");
-  } else {
-    Serial.println("mDNS responder started: http://mesh.local");
-  }
-
   initMesh();
 
   // Set up DNS server to redirect all requests to the captive portal
@@ -202,11 +171,12 @@ void setup() {
     request->send(200, "application/json", "{\"messages\":" + json + "}");
   });
 
-  // Serve connected device count as JSON
+  // Serve connected device count and node ID as JSON
   server.on("/deviceCount", HTTP_GET, [](AsyncWebServerRequest *request){
     mesh.update();
     int totalCount = mesh.getNodeList().size();
-    request->send(200, "application/json", "{\"totalCount\":" + String(totalCount) + "}");
+    uint32_t nodeId = mesh.getNodeId(); // Get the current node's ID
+    request->send(200, "application/json", "{\"totalCount\":" + String(totalCount) + ", \"nodeId\":\"" + String(nodeId) + "\"}");
   });
 
   // Serve the mesh nodes list as JSON
