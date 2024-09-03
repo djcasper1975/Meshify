@@ -6,6 +6,8 @@
 #define MESH_SSID "MeshChat 1.0"
 #define MESH_PASSWORD ""
 #define MESH_PORT 5555
+#define MAX_MESSAGE_LENGTH 256 // Define maximum length for a message
+#define MAX_SENDER_NAME_LENGTH 25 // Define maximum length for the sender's name
 
 const int maxMessages = 5;
 struct Message {
@@ -47,15 +49,18 @@ function fetchData() {
     document.getElementById('deviceCount').textContent = 'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + data.nodeId;
   });
 }
+
 window.onload = function() {
   loadName();
   fetchData();
   setInterval(fetchData, 10000);
 };
+
 function saveName() {
   const nameInput = document.getElementById('nameInput');
   localStorage.setItem('username', nameInput.value);
 }
+
 function loadName() {
   const savedName = localStorage.getItem('username');
   if (savedName) {
@@ -68,8 +73,8 @@ function loadName() {
 <h2>MeshChat 1.0</h2>
 <div class='warning'>For your safety, do not share your location or any personal information!</div>
 <form action="/update" method="POST" onsubmit="saveName()">
-  <input type="text" id="nameInput" name="sender" placeholder="Enter your name" required />
-  <input type="text" name="msg" placeholder="Enter your message" required />
+  <input type="text" id="nameInput" name="sender" placeholder="Enter your name" required maxlength="25" />
+  <input type="text" name="msg" placeholder="Enter your message" required maxlength="256" />
   <input type="submit" value="Send" />
 </form>
 <div id='deviceCount'>Mesh Nodes: 0</div>
@@ -117,10 +122,22 @@ window.onload = function() {
 
 // Callback function for incoming mesh messages
 void receivedCallback(uint32_t from, String &message) {
+  // Check if the message length exceeds the maximum allowed length
+  if (message.length() > MAX_MESSAGE_LENGTH) {
+    // Truncate the message to the maximum allowed length
+    message = message.substring(0, MAX_MESSAGE_LENGTH);
+    Serial.printf("Message truncated from %u to prevent overflow.\n", from);
+  }
+
   Serial.printf("Received message from %u: %s\n", from, message.c_str());
 
+  // Check if the message starts with "USER:"
   if (message.startsWith("USER:")) {
     String userMessage = message.substring(5);
+    if (userMessage.length() > MAX_SENDER_NAME_LENGTH) {
+      userMessage = userMessage.substring(0, MAX_SENDER_NAME_LENGTH);
+      Serial.printf("Sender name truncated to prevent overflow.\n");
+    }
     messages[messageIndex].content = userMessage;
     messages[messageIndex].sender = String(from);
     messageIndex = (messageIndex + 1) % maxMessages;
@@ -201,9 +218,15 @@ void setup() {
     String senderName = "";
     if (request->hasParam("msg", true)) {
       newMessage = request->getParam("msg", true)->value();
+      if (newMessage.length() > MAX_MESSAGE_LENGTH) {
+        newMessage = newMessage.substring(0, MAX_MESSAGE_LENGTH); // Truncate message if too long
+      }
     }
     if (request->hasParam("sender", true)) {
       senderName = request->getParam("sender", true)->value();
+      if (senderName.length() > MAX_SENDER_NAME_LENGTH) {
+        senderName = senderName.substring(0, MAX_SENDER_NAME_LENGTH); // Truncate sender name if too long
+      }
     }
 
     newMessage.replace("<", "&lt;");
