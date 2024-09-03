@@ -9,35 +9,38 @@ Real-time Node Information: Displays the number of connected nodes and the node'
 Secure Messaging: Sanitizes inputs to prevent script injection and unauthorized content sharing.
 Self-contained: Does not require an internet connection; communication is strictly within the mesh.
 
-Required Libraries
+Setup Instructions:
+Install Required Libraries:
 
-To make this project work, the following libraries are required:
+Ensure you have the latest ESP32 board package installed in the Arduino IDE.
 
-painlessMesh - Library to create and manage a WiFi mesh network.
-Install via Arduino Library Manager: Search for painlessMesh
-WiFi - Built-in ESP32 library for WiFi functionality.
-Comes pre-installed with the ESP32 board support package.
-ESPAsyncWebServer - Asynchronous web server for ESP32.
-Install via Arduino Library Manager: Search for ESPAsyncWebServer
-Requires the AsyncTCP library as a dependency.
-DNSServer - Library to handle DNS requests, used for captive portal-like behavior.
-Install via Arduino Library Manager: Search for DNSServer
+Required libraries:
+painlessMesh: Install via Arduino Library Manager by searching for painlessMesh.
+ESPAsyncWebServer: Install from the Arduino Library Manager by searching for ESPAsyncWebServer.
+AsyncTCP: Required dependency for ESPAsyncWebServer, also available via the Arduino Library Manager.
+DNSServer: Install from the Arduino Library Manager.
+Flash the Code to the ESP32:
 
-Setup Instructions
-Install the required libraries as listed above.
-Flash the code to your ESP32 using the Arduino IDE.
-Once powered, the ESP32 will create a mesh network named MeshChat 1.0.
-Connect to the mesh network using any WiFi-enabled device and access the chat interface at the ESP32's IP address.
+Copy and paste the provided code into your Arduino IDE.
+Select the correct board (e.g., "ESP32 Dev Module") and the correct COM port.
+Click "Upload" to flash the code to the ESP32.
+Connect to the WiFi Mesh Network:
 
-Usage
-Connect to wifi ssid MeshChat 1.0 and set to always connect.
-Point your browser to mesh.local
-Enter your name and message in the provided form to send messages.
-View connected mesh nodes and the current node's ID through the interface.
+After uploading, the ESP32 will create a mesh network named MeshChat 1.0.
+Connect any WiFi-enabled device (e.g., smartphone, laptop) to the mesh network.
+Access the Chat Interface:
 
-Security Warning
-Avoid sharing sensitive or personal information as this mesh chat is public within the connected network.
-This project is ideal for experimenting with mesh networking on ESP32, creating chat applications without relying on the internet, and exploring IoT communication models.
+Open a web browser on your connected device.
+Enter the ESP32's IP address, typically 192.168.4.1, in the browser's address bar. This will bring up the chat interface.
+Using the Chat Interface:
+
+Sending Messages: Enter your name and message in the form and click "Send." Messages will appear in the chat window.
+Viewing Mesh Nodes: Click on the "View Mesh Nodes List" link to see all connected nodes in the mesh network.
+Node Information: The page displays the number of connected nodes and the current node's ID.
+Security Warning:
+
+Avoid sharing personal or sensitive information. This is a local mesh network, and communication is not encrypted.
+This project is an excellent introduction to mesh networking using ESP32, allowing for decentralized communication between devices without relying on existing WiFi infrastructure.
 
 I hope it's useful to some extent. Thanks for testing!
 
