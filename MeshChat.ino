@@ -78,8 +78,8 @@ function loadName() {
   <input type="submit" value="Send" />
 </form>
 <div id='deviceCount'>Mesh Nodes: 0</div>
-<ul id='messageList'></ul>
 <a href="/nodes">View Mesh Nodes List</a><br>
+<ul id='messageList'></ul>
 <p>github.com/djcasper1975</p>
 </body>
 </html>
@@ -177,8 +177,8 @@ void setup() {
   server.on("/messages", HTTP_GET, [](AsyncWebServerRequest *request){
     String json = "[";
     bool first = true;
-    for (int i = 0; i < maxMessages; i++) {
-      int index = (messageIndex + i) % maxMessages;
+    for (int i = maxMessages - 1; i >= 0; i--) {
+      int index = (messageIndex - 1 - i + maxMessages) % maxMessages;
       if (messages[index].content != "") {
         if (!first) json += ",";
         json += "{\"sender\":\"" + messages[index].sender + "\",\"message\":\"" + messages[index].content + "\"}";
