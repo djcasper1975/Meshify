@@ -74,7 +74,8 @@ function loadName() {
 </form>
 <div id='deviceCount'>Mesh Nodes: 0</div>
 <ul id='messageList'></ul>
-<a href="/nodes">View Mesh Nodes List</a>
+<a href="/nodes">View Mesh Nodes List</a><br>
+<p>github.com/djcasper1975</p>
 </body>
 </html>
 )rawliteral";
@@ -95,7 +96,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 function fetchNodes() {
   fetch('/nodesData').then(response => response.json()).then(data => {
     const ul = document.getElementById('nodeList');
-    ul.innerHTML = data.nodes.map(node => `<li>${node}</li>`).join('');
+    ul.innerHTML = data.nodes.map((node, index) => `<li>Node${index + 1}: ${node}</li>`).join('');
     document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
   });
 }
