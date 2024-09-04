@@ -31,9 +31,6 @@ AsyncWebServer server(80);
 DNSServer dnsServer;
 painlessMesh mesh;
 
-unsigned long previousMillis = 0;
-const long interval = 10000; // Sync update interval (10 seconds)
-
 const char mainPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -143,16 +140,6 @@ window.onload = function() {
 </html>
 )rawliteral";
 
-// Function to update the OLED display
-void updateDisplay(const char* title, const char* nodeId, const char* nodeCount) {
-  u8g2.clearBuffer();                                  // Clear the internal buffer
-  int titleWidth = u8g2.getStrWidth(title);            // Get the width of the title string
-  u8g2.drawStr((128 - titleWidth) / 2, 10, title);     // Center the title at the top
-  u8g2.drawStr(0, 30, nodeId);                         // Display the node ID
-  u8g2.drawStr(0, 50, nodeCount);                      // Display the node count
-  u8g2.sendBuffer();                                   // Send the buffer to the display
-}
-
 // Callback function for incoming mesh messages
 void receivedCallback(uint32_t from, String &message) {
   if (message.length() > MAX_MESSAGE_LENGTH) {
@@ -183,6 +170,7 @@ void initMesh() {
   // Callback for when connections change
   mesh.onChangedConnections([]() {
     Serial.println("Mesh connection changed. Attempting to reconnect if possible.");
+    // Custom reconnection handling can be placed here
   });
 
   // Automatically attempt reconnections
@@ -239,15 +227,6 @@ void setup() {
     mesh.update();
     int totalCount = mesh.getNodeList().size();
     uint32_t nodeId = mesh.getNodeId(); // Get the current node's ID
-
-    // Convert data to strings
-    String nodeIdStr = "Node ID: " + String(nodeId);
-    String nodeCountStr = "Mesh Nodes: " + String(totalCount);
-
-    // Update the OLED display with the fetched data
-    updateDisplay("MeshChat 1.0", nodeIdStr.c_str(), nodeCountStr.c_str());
-
-    // Send the data as JSON for the webpage
     request->send(200, "application/json", "{\"totalCount\":" + String(totalCount) + ", \"nodeId\":\"" + String(nodeId) + "\"}");
   });
 
@@ -305,19 +284,26 @@ void loop() {
   mesh.update();
   dnsServer.processNextRequest();
 
-  // Get the current time
-  unsigned long currentMillis = millis();
+  // Get the number of connected nodes and the current node ID
+  int totalCount = mesh.getNodeList().size();
+  uint32_t nodeId = mesh.getNodeId();
+  
+  // Convert nodeId to a string
+  String nodeIdStr = "Node ID: " + String(nodeId);
+  
+  // Create a string with the node count information
+  String nodeCountStr = "Mesh Nodes: " + String(totalCount);
 
-  // Sync display update with the webpage update interval
-  if (currentMillis - previousMillis >= interval) {
-    previousMillis = currentMillis;
+  // Update the OLED display
+  updateDisplay("MeshChat 1.0", nodeIdStr.c_str(), nodeCountStr.c_str());
+}
 
-    // Fetch the latest node data and update the OLED display
-    int totalCount = mesh.getNodeList().size();
-    uint32_t nodeId = mesh.getNodeId();
-    String nodeIdStr = "Node ID: " + String(nodeId);
-    String nodeCountStr = "Mesh Nodes: " + String(totalCount);
-
-    updateDisplay("MeshChat 1.0", nodeIdStr.c_str(), nodeCountStr.c_str());
-  }
+// Function to update the OLED display
+void updateDisplay(const char* title, const char* nodeId, const char* nodeCount) {
+  u8g2.clearBuffer();                 // Clear the internal buffer
+  int titleWidth = u8g2.getStrWidth(title);  // Get the width of the title string
+  u8g2.drawStr((128 - titleWidth) / 2, 10, title); // Center the title at the top
+  u8g2.drawStr(0, 30, nodeId);        // Display the node ID
+  u8g2.drawStr(0, 50, nodeCount);     // Display the node count
+  u8g2.sendBuffer();                  // Send the buffer to the display
 }
