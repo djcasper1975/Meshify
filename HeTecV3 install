@@ -1,0 +1,13 @@
+Required Libraries:
+
+No Different Libraries Needed: The libraries required for the updated version are the same as those used in the original project:
+painlessMesh
+ESPAsyncWebServer
+DNSServer
+Board Selection:
+Select the Board:
+Choose Heltec WiFi LoRa V3 in the Arduino IDE under Tools > Board.
+If Heltec WiFi LoRa V3 is not listed, you can alternatively select ESP32 Dev Module.
+Additional Note:
+Ensure that the ESP32 core is updated to the latest version using the URL provided earlier.
+This is all you need for the updated code to work on the Heltec V3 board without using LoRa or the OLED display.
