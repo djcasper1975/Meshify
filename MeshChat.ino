@@ -41,13 +41,25 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
 </style>
 <script>
 function fetchData() {
-  fetch('/messages').then(response => response.json()).then(data => {
-    const ul = document.getElementById('messageList');
-    ul.innerHTML = data.messages.map(msg => `<li>${msg.sender}: ${msg.message}</li>`).join('');
-  });
-  fetch('/deviceCount').then(response => response.json()).then(data => {
-    document.getElementById('deviceCount').textContent = 'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + data.nodeId;
-  });
+  fetch('/messages')
+    .then(response => response.json())
+    .then(data => {
+      const ul = document.getElementById('messageList');
+      ul.innerHTML = ''; // Clear the list before updating
+      // Prepend each message to the list
+      data.messages.forEach(msg => {
+        const li = document.createElement('li');
+        li.innerText = `${msg.sender}: ${msg.message}`;
+        ul.prepend(li); // Add each message at the start of the list
+      });
+    });
+
+  fetch('/deviceCount')
+    .then(response => response.json())
+    .then(data => {
+      document.getElementById('deviceCount').textContent =
+        'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + data.nodeId;
+    });
 }
 
 window.onload = function() {
