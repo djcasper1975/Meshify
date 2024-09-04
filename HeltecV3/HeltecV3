@@ -3,7 +3,6 @@
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
 
-
 #define MESH_SSID "MeshChat 1.0"
 #define MESH_PASSWORD ""
 #define MESH_PORT 5555
@@ -192,6 +191,15 @@ void initMesh() {
   mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
   mesh.init(MESH_SSID, MESH_PASSWORD, MESH_PORT);
   mesh.onReceive(receivedCallback);
+  
+  // Callback for when connections change
+  mesh.onChangedConnections([]() {
+    Serial.println("Mesh connection changed. Attempting to reconnect if possible.");
+    // Custom reconnection handling can be placed here
+  });
+
+  // Automatically attempt reconnections
+  mesh.setContainsRoot(false);
 }
 
 void setup() {
@@ -293,4 +301,6 @@ void setup() {
 void loop() {
   mesh.update();
   dnsServer.processNextRequest();
+
+  // Optional additional reconnection logic can be added here if needed
 }
