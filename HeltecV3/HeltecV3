@@ -2,6 +2,8 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
+#include <Wire.h>
+#include <U8g2lib.h> // Include the U8g2 library for the OLED display
 
 #define MESH_SSID "MeshChat 1.0"
 #define MESH_PASSWORD ""
@@ -9,39 +11,13 @@
 #define MAX_MESSAGE_LENGTH 256
 #define MAX_SENDER_NAME_LENGTH 25
 
-// Hardware-specific configurations
-#define LED_PIN LED
 #define USE_SSD1306
 #define RESET_OLED RST_OLED
 #define I2C_SDA SDA_OLED
 #define I2C_SCL SCL_OLED
-#define I2C_SDA1 SDA
-#define I2C_SCL1 SCL
 #define VEXT_ENABLE Vext
-#define BUTTON_PIN 0
 
-#define ADC_CTRL 37
-#define ADC_CTRL_ENABLED LOW
-#define BATTERY_PIN 1
-#define ADC_CHANNEL ADC1_GPIO1_CHANNEL
-#define ADC_ATTENUATION ADC_ATTEN_DB_2_5
-#define ADC_MULTIPLIER 4.9 * 1.045
-
-#define USE_SX1262
-#define LORA_DIO0 -1
-#define LORA_RESET 12
-#define LORA_DIO1 14
-#define LORA_DIO2 13
-#define LORA_SCK 9
-#define LORA_MISO 11
-#define LORA_MOSI 10
-#define LORA_CS 8
-#define SX126X_CS LORA_CS
-#define SX126X_DIO1 LORA_DIO1
-#define SX126X_BUSY LORA_DIO2
-#define SX126X_RESET LORA_RESET
-#define SX126X_DIO2_AS_RF_SWITCH
-#define SX126X_DIO3_TCXO_VOLTAGE 1.8
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, RESET_OLED, I2C_SCL, I2C_SDA);
 
 const int maxMessages = 5;
 struct Message {
@@ -53,8 +29,10 @@ int messageIndex = 0;
 
 AsyncWebServer server(80);
 DNSServer dnsServer;
-
 painlessMesh mesh;
+
+unsigned long previousMillis = 0;
+const long interval = 10000; // Sync update interval (10 seconds)
 
 const char mainPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -165,6 +143,16 @@ window.onload = function() {
 </html>
 )rawliteral";
 
+// Function to update the OLED display
+void updateDisplay(const char* title, const char* nodeId, const char* nodeCount) {
+  u8g2.clearBuffer();                                  // Clear the internal buffer
+  int titleWidth = u8g2.getStrWidth(title);            // Get the width of the title string
+  u8g2.drawStr((128 - titleWidth) / 2, 10, title);     // Center the title at the top
+  u8g2.drawStr(0, 30, nodeId);                         // Display the node ID
+  u8g2.drawStr(0, 50, nodeCount);                      // Display the node count
+  u8g2.sendBuffer();                                   // Send the buffer to the display
+}
+
 // Callback function for incoming mesh messages
 void receivedCallback(uint32_t from, String &message) {
   if (message.length() > MAX_MESSAGE_LENGTH) {
@@ -195,7 +183,6 @@ void initMesh() {
   // Callback for when connections change
   mesh.onChangedConnections([]() {
     Serial.println("Mesh connection changed. Attempting to reconnect if possible.");
-    // Custom reconnection handling can be placed here
   });
 
   // Automatically attempt reconnections
@@ -208,6 +195,13 @@ void setup() {
   // Initialize WiFi and Mesh network
   WiFi.mode(WIFI_AP);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
+
+  // Initialize OLED display
+  pinMode(VEXT_ENABLE, OUTPUT);
+  digitalWrite(VEXT_ENABLE, LOW); // Set LOW to enable Vext, adjust as necessary for your board
+  u8g2.begin();
+  u8g2.setFont(u8g2_font_ncenB08_tr); // Set font for display
+  updateDisplay("Initializing", "Please wait...", "0");
 
   initMesh();
 
@@ -245,6 +239,15 @@ void setup() {
     mesh.update();
     int totalCount = mesh.getNodeList().size();
     uint32_t nodeId = mesh.getNodeId(); // Get the current node's ID
+
+    // Convert data to strings
+    String nodeIdStr = "Node ID: " + String(nodeId);
+    String nodeCountStr = "Mesh Nodes: " + String(totalCount);
+
+    // Update the OLED display with the fetched data
+    updateDisplay("MeshChat 1.0", nodeIdStr.c_str(), nodeCountStr.c_str());
+
+    // Send the data as JSON for the webpage
     request->send(200, "application/json", "{\"totalCount\":" + String(totalCount) + ", \"nodeId\":\"" + String(nodeId) + "\"}");
   });
 
@@ -302,5 +305,19 @@ void loop() {
   mesh.update();
   dnsServer.processNextRequest();
 
-  // Optional additional reconnection logic can be added here if needed
+  // Get the current time
+  unsigned long currentMillis = millis();
+
+  // Sync display update with the webpage update interval
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+
+    // Fetch the latest node data and update the OLED display
+    int totalCount = mesh.getNodeList().size();
+    uint32_t nodeId = mesh.getNodeId();
+    String nodeIdStr = "Node ID: " + String(nodeId);
+    String nodeCountStr = "Mesh Nodes: " + String(totalCount);
+
+    updateDisplay("MeshChat 1.0", nodeIdStr.c_str(), nodeCountStr.c_str());
+  }
 }
