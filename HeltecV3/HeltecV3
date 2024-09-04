@@ -2,7 +2,7 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
-// Note: LoRa code remains excluded as requested, with hardware-specific settings in place for when you decide to re-enable it.
+
 
 #define MESH_SSID "MeshChat 1.0"
 #define MESH_PASSWORD ""
