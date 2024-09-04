@@ -161,6 +161,15 @@ void initMesh() {
   mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
   mesh.init(MESH_SSID, MESH_PASSWORD, MESH_PORT);
   mesh.onReceive(receivedCallback);
+
+  // Callback for when connections change
+  mesh.onChangedConnections([]() {
+    Serial.println("Mesh connection changed. Attempting to reconnect if possible.");
+    // Custom reconnection handling can be placed here
+  });
+
+  // Automatically attempt reconnections
+  mesh.setContainsRoot(false);
 }
 
 void setup() {
