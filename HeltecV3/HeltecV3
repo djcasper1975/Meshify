@@ -2,14 +2,47 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
-
-// Disable LoRa by not defining or including any LoRa-specific code or libraries
+// Note: LoRa code remains excluded as requested, with hardware-specific settings in place for when you decide to re-enable it.
 
 #define MESH_SSID "MeshChat 1.0"
 #define MESH_PASSWORD ""
 #define MESH_PORT 5555
-#define MAX_MESSAGE_LENGTH 256 // Define maximum length for a message
-#define MAX_SENDER_NAME_LENGTH 25 // Define maximum length for the sender's name
+#define MAX_MESSAGE_LENGTH 256
+#define MAX_SENDER_NAME_LENGTH 25
+
+// Hardware-specific configurations
+#define LED_PIN LED
+#define USE_SSD1306
+#define RESET_OLED RST_OLED
+#define I2C_SDA SDA_OLED
+#define I2C_SCL SCL_OLED
+#define I2C_SDA1 SDA
+#define I2C_SCL1 SCL
+#define VEXT_ENABLE Vext
+#define BUTTON_PIN 0
+
+#define ADC_CTRL 37
+#define ADC_CTRL_ENABLED LOW
+#define BATTERY_PIN 1
+#define ADC_CHANNEL ADC1_GPIO1_CHANNEL
+#define ADC_ATTENUATION ADC_ATTEN_DB_2_5
+#define ADC_MULTIPLIER 4.9 * 1.045
+
+#define USE_SX1262
+#define LORA_DIO0 -1
+#define LORA_RESET 12
+#define LORA_DIO1 14
+#define LORA_DIO2 13
+#define LORA_SCK 9
+#define LORA_MISO 11
+#define LORA_MOSI 10
+#define LORA_CS 8
+#define SX126X_CS LORA_CS
+#define SX126X_DIO1 LORA_DIO1
+#define SX126X_BUSY LORA_DIO2
+#define SX126X_RESET LORA_RESET
+#define SX126X_DIO2_AS_RF_SWITCH
+#define SX126X_DIO3_TCXO_VOLTAGE 1.8
 
 const int maxMessages = 5;
 struct Message {
