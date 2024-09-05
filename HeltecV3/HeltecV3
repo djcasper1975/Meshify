@@ -166,11 +166,10 @@ void initMesh() {
   mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
   mesh.init(MESH_SSID, MESH_PASSWORD, MESH_PORT);
   mesh.onReceive(receivedCallback);
-  
+
   // Callback for when connections change
   mesh.onChangedConnections([]() {
     Serial.println("Mesh connection changed. Attempting to reconnect if possible.");
-    // Custom reconnection handling can be placed here
   });
 
   // Automatically attempt reconnections
@@ -186,10 +185,10 @@ void setup() {
 
   // Initialize OLED display
   pinMode(VEXT_ENABLE, OUTPUT);
-  digitalWrite(VEXT_ENABLE, LOW); // Set LOW to enable Vext, adjust as necessary for your board
+  digitalWrite(VEXT_ENABLE, LOW); // Set LOW to enable Vext
   u8g2.begin();
   u8g2.setFont(u8g2_font_ncenB08_tr); // Set font for display
-  updateDisplay("Initializing", "Please wait...", "0");
+  updateDisplay("Initializing", "Please wait...", "Nodes: 0");
 
   initMesh();
 
@@ -226,7 +225,7 @@ void setup() {
   server.on("/deviceCount", HTTP_GET, [](AsyncWebServerRequest *request) {
     mesh.update();
     int totalCount = mesh.getNodeList().size();
-    uint32_t nodeId = mesh.getNodeId(); // Get the current node's ID
+    uint32_t nodeId = mesh.getNodeId();
     request->send(200, "application/json", "{\"totalCount\":" + String(totalCount) + ", \"nodeId\":\"" + String(nodeId) + "\"}");
   });
 
@@ -252,13 +251,13 @@ void setup() {
     if (request->hasParam("msg", true)) {
       newMessage = request->getParam("msg", true)->value();
       if (newMessage.length() > MAX_MESSAGE_LENGTH) {
-        newMessage = newMessage.substring(0, MAX_MESSAGE_LENGTH); // Truncate message if too long
+        newMessage = newMessage.substring(0, MAX_MESSAGE_LENGTH);
       }
     }
     if (request->hasParam("sender", true)) {
       senderName = request->getParam("sender", true)->value();
       if (senderName.length() > MAX_SENDER_NAME_LENGTH) {
-        senderName = senderName.substring(0, MAX_SENDER_NAME_LENGTH); // Truncate sender name if too long
+        senderName = senderName.substring(0, MAX_SENDER_NAME_LENGTH);
       }
     }
 
@@ -287,10 +286,10 @@ void loop() {
   // Get the number of connected nodes and the current node ID
   int totalCount = mesh.getNodeList().size();
   uint32_t nodeId = mesh.getNodeId();
-  
+
   // Convert nodeId to a string
   String nodeIdStr = "Node ID: " + String(nodeId);
-  
+
   // Create a string with the node count information
   String nodeCountStr = "Mesh Nodes: " + String(totalCount);
 
