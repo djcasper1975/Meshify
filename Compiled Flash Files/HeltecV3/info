@@ -1,1 +1,11 @@
 
+Files for flashing to device.
+I used this and it worked.
+https://espressif.github.io/esptool-js/
+dont forget to set the flash adress for each file.
+
+0x0000   WiFiChat.ino.bootloader.bin
+0x8000   WiFiChat.ino.partitions.bin
+0x10000  WiFiChat.ino.bin
+
+Please power off and on after flashing.
