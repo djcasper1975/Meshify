@@ -5,7 +5,7 @@ I used this and it worked.
 https://espressif.github.io/esptool-js/
 dont forget to set the flash adress for each file and erase device before flashing.
 
-0x0000   MeshChat.ino.bootloader.bin
+0x0000   MeshChat.ino.bootloader.bin    -  make sure you dont use 0x1000 it wont work!
 0x8000   MeshChat.ino.partitions.bin
 0x10000  MeshChat.ino.bin
 
