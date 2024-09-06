@@ -1,11 +1,13 @@
+
+ESP32 Dev Module Board (generic)
+
 Files for flashing to device.
 I used this and it worked.
 https://espressif.github.io/esptool-js/
-dont forget to set the flash adress for each file.
-files are named with the correct flash adress so just copy the adress from the filenames.
+dont forget to set the flash adress for each file and erase device before flashing.
 
-0x1000WiFiChat.ino.bootloader.bin       0x1000
-0x8000WiFiChat.ino.partitions.bin     0x8000
-0x10000WiFiChat.ino.bin      0x10000   
+0x0000   WiFiChat.ino.bootloader.bin
+0x8000   WiFiChat.ino.partitions.bin
+0x10000  WiFiChat.ino.bin
 
-after flashing you must power off and on again.
+Please power off and on after flashing.
