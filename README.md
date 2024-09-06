@@ -32,6 +32,7 @@ Install Required Libraries:
 Ensure you have the latest ESP32 board package installed in the Arduino IDE.
 
 Required libraries:
+ESP32 v 2.2.10
 painlessMesh: Install via Arduino Library Manager by searching for painlessMesh.
 ESPAsyncWebServer: Install from the Arduino Library Manager by searching for ESPAsyncWebServer.
 AsyncTCP: Required dependency for ESPAsyncWebServer, also available via the Arduino Library Manager.
