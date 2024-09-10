@@ -50,6 +50,8 @@ Access the Chat Interface:
 
 Open a web browser on your connected device.
 Enter mesh.local or the ESP32's IP address, typically 10.60.125.1, in the browser's address bar. This will bring up the chat interface.
+To prevent disconnections each time your client switches between mesh nodes after connecting to Wi-Fi, set it to always stay connected.
+
 Using the Chat Interface:
 
 Sending Messages: Enter your name and message in the form and click "Send." Messages will appear in the chat window.
