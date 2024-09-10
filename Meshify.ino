@@ -3,8 +3,8 @@
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
 
+// Constants and Variables
 #define MESH_SSID "Meshify 1.0"
-#define MESH_PASSWORD ""  // this is not needed
 #define MESH_PORT 5555
 
 const int maxMessages = 10;
@@ -17,9 +17,13 @@ int messageIndex = 0;
 
 AsyncWebServer server(80);
 DNSServer dnsServer;
-
 painlessMesh mesh;
 
+// Centralized storage for node data
+int totalNodeCount = 0;
+uint32_t currentNodeId = 0;
+
+// HTML Page Content
 const char mainPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -130,6 +134,34 @@ window.onload = function() {
 </html>
 )rawliteral";
 
+// Function to update centralized mesh data
+void updateMeshData() {
+  mesh.update(); // Ensure the mesh is updated
+  totalNodeCount = mesh.getNodeList().size();
+  currentNodeId = mesh.getNodeId();
+
+  // Debugging outputs to check values
+  Serial.print("Updated Node Count: ");
+  Serial.println(totalNodeCount);
+  Serial.print("Updated Node ID: ");
+  Serial.println(currentNodeId);
+}
+
+// Getter functions for centralized data
+int getNodeCount() {
+  return totalNodeCount;
+}
+
+uint32_t getNodeId() {
+  return currentNodeId;
+}
+
+// Function to update node count and display immediately
+void updateNodeDisplay() {
+  updateMeshData(); // Ensure data is up-to-date before displaying
+  Serial.println("Updating display with current mesh data...");
+}
+
 // Callback function for incoming mesh messages
 void receivedCallback(uint32_t from, String &message) {
   Serial.printf("Received message from %u: %s\n", from, message.c_str());
@@ -146,42 +178,35 @@ void receivedCallback(uint32_t from, String &message) {
 // Mesh initialization and setup
 void initMesh() {
   mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
-  mesh.init(MESH_SSID, MESH_PASSWORD, MESH_PORT);
+  mesh.init(MESH_SSID, "", MESH_PORT);
   mesh.onReceive(receivedCallback);
 
   // Callback for when connections change
   mesh.onChangedConnections([]() {
     Serial.println("Mesh connection changed.");
+    updateNodeDisplay(); // Update display when connections change
   });
 
   // Automatically attempt reconnections
   mesh.setContainsRoot(false);
 }
 
-void setup() {
-  Serial.begin(115200);
+// Function to serve HTML pages
+void serveHtml(AsyncWebServerRequest *request, const char* htmlContent) {
+  request->send(200, "text/html", htmlContent);
+}
 
-  // Initialize WiFi and Mesh network
-  WiFi.mode(WIFI_AP);
-  WiFi.setTxPower(WIFI_POWER_19_5dBm);
-
-  initMesh();
-
-  // Set up DNS server to redirect all requests to the captive portal
-  dnsServer.start(53, "*", WiFi.softAPIP());
-
-  // Serve the main page
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/html", mainPageHtml);
+// Function to set up server routes
+void setupServerRoutes() {
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    serveHtml(request, mainPageHtml);
   });
 
-  // Serve the nodes page
-  server.on("/nodes", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/html", nodesPageHtml);
+  server.on("/nodes", HTTP_GET, [](AsyncWebServerRequest *request) {
+    serveHtml(request, nodesPageHtml);
   });
 
-  // Serve messages as JSON
-  server.on("/messages", HTTP_GET, [](AsyncWebServerRequest *request){
+  server.on("/messages", HTTP_GET, [](AsyncWebServerRequest *request) {
     String json = "[";
     bool first = true;
     for (int i = maxMessages - 1; i >= 0; i--) {
@@ -196,17 +221,13 @@ void setup() {
     request->send(200, "application/json", "{\"messages\":" + json + "}");
   });
 
-  // Serve connected device count and node ID as JSON
-  server.on("/deviceCount", HTTP_GET, [](AsyncWebServerRequest *request){
-    mesh.update();
-    int totalCount = mesh.getNodeList().size();
-    uint32_t nodeId = mesh.getNodeId(); // Get the current node's ID
-    request->send(200, "application/json", "{\"totalCount\":" + String(totalCount) + ", \"nodeId\":\"" + String(nodeId) + "\"}");
+  server.on("/deviceCount", HTTP_GET, [](AsyncWebServerRequest *request) {
+    updateMeshData(); // Centralized data update
+    request->send(200, "application/json", "{\"totalCount\":" + String(getNodeCount()) + ", \"nodeId\":\"" + String(getNodeId()) + "\"}");
   });
 
-  // Serve the mesh nodes list as JSON
-  server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest *request){
-    mesh.update();
+  server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest *request) {
+    updateMeshData(); // Centralized data update
     String json = "[";
     auto nodeList = mesh.getNodeList();
     bool first = true;
@@ -219,8 +240,7 @@ void setup() {
     request->send(200, "application/json", "{\"nodes\":" + json + "}");
   });
 
-  // Handle message update
-  server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request){
+  server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
     String newMessage = "";
     String senderName = "";
     if (request->hasParam("msg", true)) {
@@ -244,7 +264,19 @@ void setup() {
 
     request->redirect("/");
   });
+}
 
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize WiFi and Mesh network
+  WiFi.mode(WIFI_AP);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+
+  initMesh();
+  setupServerRoutes(); // Set up all server routes in one call
+
+  dnsServer.start(53, "*", WiFi.softAPIP());
   server.begin();
 }
 
