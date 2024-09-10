@@ -1,4 +1,4 @@
-MeshChat 1.0 is a lightweight web-based chat application designed to run on ESP32 microcontrollers using a mesh network. This project leverages the painlessMesh library to create a self-healing, self-configuring WiFi mesh network, allowing nodes to communicate without relying on a traditional WiFi router. Users can send and receive messages over the mesh network, view connected nodes, and interact with other participants through a simple web interface hosted on the ESP32.
+Meshify is a lightweight web-based chat application designed to run on ESP32 microcontrollers using a mesh network. This project leverages the painlessMesh library to create a self-healing, self-configuring WiFi mesh network, allowing nodes to communicate without relying on a traditional WiFi router. Users can send and receive messages over the mesh network, view connected nodes, and interact with other participants through a simple web interface hosted on the ESP32.
 
 Features
 Mesh Networking: Uses painlessMesh to create a dynamic, decentralized WiFi mesh network.
