@@ -11,3 +11,13 @@ dont forget to set the flash adress for each file and erase device before flashi
 0x10000  Meshify.ino.bin
 
 Please power off and on after flashing.
+
+Non-Release, Compiled Versions: The files provided are not official releases but rather compiled versions of the current codebase.
+
+Expectations of Breakages: It's normal for things to work at times and then break; this is part of the development process.
+
+Frequent Updates: Updates usually aim to fix issues or add new features, but these changes can sometimes cause new problems temporarily.
+
+Monitoring and Swift Fixes: The development team closely monitors the system, and any issues following an update are addressed quickly.
+
+Fallback Option: If an update causes persistent problems, users are advised to revert to a previous working version until the issues are resolved.
