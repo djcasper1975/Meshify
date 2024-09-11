@@ -6,7 +6,7 @@
 #include <esp_task_wdt.h> // Watchdog timer library
 
 // Uncomment the following line if using Heltec WiFi LoRa 32 v3 with OLED screen to test Meshify.
-//#define USE_DISPLAY
+#define USE_DISPLAY
 
 #ifdef USE_DISPLAY
 #include <U8g2lib.h> // Include the U8g2 library for the OLED display
@@ -22,6 +22,7 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, RESET_OLED, I2C_SCL, I2C_SDA);
 
 // Constants and Variables
 #define MESH_SSID "Meshify 1.0"
+#define MESH_PASSWORD ""  //you can use a password for private mesh or keep without to mesh publicly.
 #define MESH_PORT 5555
 
 const int maxMessages = 10;
@@ -216,7 +217,7 @@ void receivedCallback(uint32_t from, String &message) {
 // Mesh initialization and setup
 void initMesh() {
   mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
-  mesh.init(MESH_SSID, "", MESH_PORT);
+  mesh.init(MESH_SSID, MESH_PASSWORD, MESH_PORT);
   mesh.onReceive(receivedCallback);
 
   // Callback for when connections change
@@ -237,8 +238,8 @@ void initializeBalls() {
     balls[i].size = 4; // Set the size of each ball
     balls[i].x = random(balls[i].size + 1, u8g2.getWidth() - balls[i].size - 1);
     balls[i].y = random(balls[i].size + 1, u8g2.getHeight() - balls[i].size - 1);
-    balls[i].speedX = random(1, 3) * (random(0, 2) == 0 ? 1 : -1);
-    balls[i].speedY = random(1, 3) * (random(0, 2) == 0 ? 1 : -1);
+    balls[i].speedX = random(1, 4) * (random(0, 2) == 0 ? 1 : -1);
+    balls[i].speedY = random(1, 4) * (random(0, 2) == 0 ? 1 : -1);
   }
 }
 
