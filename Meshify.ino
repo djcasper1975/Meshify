@@ -389,6 +389,11 @@ void setup() {
 
   WiFi.mode(WIFI_AP);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  WiFi.setSleep(false);                 // Disable Wi-Fi sleep mode
+
+  // Disable any automatic sleep or wake-up sources for the ESP32
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
 
   #ifdef USE_DISPLAY
   pinMode(VEXT_ENABLE, OUTPUT);
