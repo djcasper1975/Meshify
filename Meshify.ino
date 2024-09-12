@@ -6,7 +6,7 @@
 #include <esp_task_wdt.h> // Watchdog timer library
 
 // Uncomment the following line if using Heltec WiFi LoRa 32 v3 with OLED screen to test Meshify.
-#define USE_DISPLAY
+//#define USE_DISPLAY
 
 #ifdef USE_DISPLAY
 #include <U8g2lib.h> // Include the U8g2 library for the OLED display
