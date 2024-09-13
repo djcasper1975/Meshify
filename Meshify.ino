@@ -1,6 +1,6 @@
-// Define flags to enable or disable features (Heltec Lora 32 V3) ONLY!!!!!
-//#define ENABLE_LORA // Comment this line to disable LoRa functionality
-//#define ENABLE_DISPLAY // Comment this line to disable OLED display functionality
+// Define flags to enable or disable features
+#define ENABLE_LORA // Comment this line to disable LoRa functionality
+#define ENABLE_DISPLAY // Comment this line to disable OLED display functionality
 
 // Includes and Definitions
 #ifdef ENABLE_DISPLAY
@@ -127,7 +127,7 @@ function fetchData() {
         const li = document.createElement('li');
         // Set color based on source
         const tagClass = msg.source === '[WiFi]' ? 'wifi' : 'lora';
-        li.innerHTML = <span class="${tagClass}">${msg.source}</span> ${msg.sender}: ${msg.message};
+        li.innerHTML = `<span class="${tagClass}">${msg.source}</span> ${msg.sender}: ${msg.message}`;
         ul.prepend(li); // Add each message at the start of the list
       });
     });
@@ -192,7 +192,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 function fetchNodes() {
   fetch('/nodesData').then(response => response.json()).then(data => {
     const ul = document.getElementById('nodeList');
-    ul.innerHTML = data.nodes.map((node, index) => <li>Node ${index + 1}: ${node}</li>).join('');
+    ul.innerHTML = data.nodes.map((node, index) => `<li>Node ${index + 1}: ${node}</li>`).join('');
     document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
   });
 }
