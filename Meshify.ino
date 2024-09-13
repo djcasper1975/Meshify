@@ -1,67 +1,102 @@
+// Define flags to enable or disable features (Heltec Lora 32 V3) ONLY!!!!!
+//#define ENABLE_LORA // Comment this line to disable LoRa functionality
+//#define ENABLE_DISPLAY // Comment this line to disable OLED display functionality
+
+// Includes and Definitions
+#ifdef ENABLE_DISPLAY
+#define HELTEC_POWER_BUTTON // Use the power button feature of Heltec
+#include <heltec_unofficial.h> // Heltec library for OLED and LoRa
+#endif
+
 #include <painlessMesh.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
 #include <Wire.h>
 #include <esp_task_wdt.h> // Watchdog timer library
+#include <vector> // For handling list of message IDs
 
-// Uncomment the following line if using Heltec WiFi LoRa 32 v3 with OLED screen to test Meshify.
-//#define USE_DISPLAY
-
-#ifdef USE_DISPLAY
-#include <U8g2lib.h> // Include the U8g2 library for the OLED display
-
-// Display setup
-#define RESET_OLED RST_OLED
-#define I2C_SDA SDA_OLED
-#define I2C_SCL SCL_OLED
-#define VEXT_ENABLE Vext
-
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, RESET_OLED, I2C_SCL, I2C_SDA);
+// LoRa Parameters
+#ifdef ENABLE_LORA
+#define PAUSE 300
+#define FREQUENCY 866.3
+#define BANDWIDTH 250.0
+#define SPREADING_FACTOR 9
+#define TRANSMIT_POWER 0
 #endif
 
-// Constants and Variables
+// Meshify Parameters
 #define MESH_SSID "Meshify 1.0"
-#define MESH_PASSWORD ""  //you can use a password for private mesh or keep without to mesh publicly.
+#define MESH_PASSWORD ""
 #define MESH_PORT 5555
-
 const int maxMessages = 10;
-struct Message {
-  String sender;
-  String content;
-};
-Message messages[maxMessages];
-int messageIndex = 0;
 
+// Duty Cycle Variables
+bool bypassDutyCycle = false; // Set to true to bypass duty cycle check
+uint64_t last_tx = 0;
+uint64_t minimum_pause = 0;
+bool dutyCycleActive = false; // Tracks if duty cycle limit is reached
+
+// Mesh and Web Server Setup
 AsyncWebServer server(80);
 DNSServer dnsServer;
 painlessMesh mesh;
 
-unsigned long previousMillis = 0;
-unsigned long animationPreviousMillis = 0;
-const long interval = 5000;          // Unified update interval (5 seconds)
-const long animationInterval = 90000; // Animation interval (1 minute 30 seconds)
-const long animationDuration = 30000;  // Animation duration (30 seconds)
-
-// Ball properties structure
-struct Ball {
-  int x;          // X position
-  int y;          // Y position
-  float speedX;   // Speed in the X direction
-  float speedY;   // Speed in the Y direction
-  int size;       // Ball size
+// Message structure for Meshify
+struct Message {
+  String id; // Unique ID for the message
+  String sender;
+  String content;
+  String source; // Indicates message source (WiFi or LoRa)
 };
+Message messages[maxMessages];
+int messageIndex = 0;
 
-// Array to hold multiple balls
-const int numBalls = 3; // Number of balls
-Ball balls[numBalls];   // Array of balls
-bool isAnimating = false; // Flag to control when to animate
+// List to store recent message IDs to prevent re-transmitting the same message
+std::vector<String> forwardedMessageIDs;
+const int maxStoredIDs = 50; // Maximum number of IDs to store for preventing loops
 
-// Centralized storage for node data
+// Shared Variables
+#ifdef ENABLE_LORA
+String rxdata;
+volatile bool rxFlag = false;
+long counter = 0;
+uint64_t tx_time;
+#endif
+
+// Centralized mesh data
 int totalNodeCount = 0;
 uint32_t currentNodeId = 0;
 
-// HTML Page Content
+// Function to generate a unique message ID
+String generateMessageID() {
+  return String(getNodeId()) + "-" + String(millis()); // Combines Node ID and current time
+}
+
+// Function to check if a message ID has been forwarded
+bool hasForwardedMessage(const String& id) {
+  return std::find(forwardedMessageIDs.begin(), forwardedMessageIDs.end(), id) != forwardedMessageIDs.end();
+}
+
+// Function to remember a forwarded message ID
+void rememberMessageID(const String& id) {
+  forwardedMessageIDs.push_back(id);
+  if (forwardedMessageIDs.size() > maxStoredIDs) {
+    forwardedMessageIDs.erase(forwardedMessageIDs.begin()); // Keep the list within size limits
+  }
+}
+
+// Function to handle incoming messages and update the message array
+void handleIncomingMessage(const String& id, const String& sender, const String& content, const String& source) {
+  // Create a new message structure
+  Message newMessage = {id, sender, content, source};
+
+  // Save the message in the circular buffer
+  messages[messageIndex] = newMessage;
+  messageIndex = (messageIndex + 1) % maxMessages; // Update the index cyclically
+}
+
+// Main HTML Page Content
 const char mainPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -78,6 +113,8 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
   li { background-color: #f9f9f9; margin: 5px 0; padding: 10px; border-radius: 5px; word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; }
   #deviceCount { margin: 20px auto; max-width: 500px; }
   .warning { color: red; margin-bottom: 20px; }
+  .wifi { color: blue; } /* WiFi message tag color */
+  .lora { color: orange; } /* LoRa message tag color */
 </style>
 <script>
 function fetchData() {
@@ -88,7 +125,9 @@ function fetchData() {
       ul.innerHTML = ''; // Clear the list before updating
       data.messages.forEach(msg => {
         const li = document.createElement('li');
-        li.innerText = `${msg.sender}: ${msg.message}`;
+        // Set color based on source
+        const tagClass = msg.source === '[WiFi]' ? 'wifi' : 'lora';
+        li.innerHTML = <span class="${tagClass}">${msg.source}</span> ${msg.sender}: ${msg.message};
         ul.prepend(li); // Add each message at the start of the list
       });
     });
@@ -136,6 +175,7 @@ function loadName() {
 </html>
 )rawliteral";
 
+// Nodes List HTML Page Content
 const char nodesPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -152,7 +192,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 function fetchNodes() {
   fetch('/nodesData').then(response => response.json()).then(data => {
     const ul = document.getElementById('nodeList');
-    ul.innerHTML = data.nodes.map((node, index) => `<li>Node ${index + 1}: ${node}</li>`).join('');
+    ul.innerHTML = data.nodes.map((node, index) => <li>Node ${index + 1}: ${node}</li>).join('');
     document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
   });
 }
@@ -171,159 +211,231 @@ window.onload = function() {
 </html>
 )rawliteral";
 
-// Function to update centralized mesh data
-void updateMeshData() {
-  mesh.update(); // Ensure the mesh is updated
-  totalNodeCount = mesh.getNodeList().size();
-  currentNodeId = mesh.getNodeId();
+#ifdef ENABLE_DISPLAY
+// Update the display with Meshify information and duty cycle status
+void updateDisplay() {
+  display.clear();
+  display.setFont(ArialMT_Plain_10); // Set to a slightly larger but still readable font
 
-  // Debugging outputs to check values
-  Serial.print("Updated Node Count: ");
-  Serial.println(totalNodeCount);
-  Serial.print("Updated Node ID: ");
-  Serial.println(currentNodeId);
-}
+  int16_t titleWidth = display.getStringWidth("Meshify 1.0");
+  display.drawString((128 - titleWidth) / 2, 0, "Meshify 1.0");
+  display.drawString(0, 16, "Node ID: " + String(getNodeId())); // Position adjusted for clarity
+  display.drawString(0, 32, "Mesh Nodes: " + String(getNodeCount())); // Moved up slightly for better layout
 
-// Getter functions for centralized data
-int getNodeCount() {
-  return totalNodeCount;
-}
-
-uint32_t getNodeId() {
-  return currentNodeId;
-}
-
-#ifdef USE_DISPLAY
-// Function to update node count and display immediately
-void updateNodeDisplay() {
-  updateMeshData(); // Ensure data is up-to-date before displaying
-  Serial.println("Updating display with current mesh data...");
-  updateDisplay("Meshify 1.0", ("Node ID: " + String(getNodeId())).c_str(), ("Mesh Nodes: " + String(getNodeCount())).c_str());
+  // Show duty cycle status with adjusted position
+  if (dutyCycleActive) {
+    display.drawString(0, 46, "Duty Cycle Limit Reached!"); // Positioned for better visibility
+  } else {
+    display.drawString(0, 46, "LoRa Tx Allowed"); // Updated text and adjusted position
+  }
+  display.display();
 }
 #endif
 
-// Callback function for incoming mesh messages
-void receivedCallback(uint32_t from, String &message) {
-  Serial.printf("Received message from %u: %s\n", from, message.c_str());
-
-  if (message.startsWith("USER:")) {
-    String userMessage = message.substring(5);
-    messages[messageIndex].content = userMessage;
-    messages[messageIndex].sender = String(from);
-    messageIndex = (messageIndex + 1) % maxMessages;
+// Function to check and enforce duty cycle
+bool isDutyCycleAllowed() {
+  if (bypassDutyCycle) {
+    return true; // Bypass duty cycle if override is set
+  }
+  if (millis() > last_tx + minimum_pause) {
+    dutyCycleActive = false; // Reset duty cycle status when allowed
+    return true;
+  } else {
+    dutyCycleActive = true; // Set duty cycle status when limit is reached
+    return false;
   }
 }
 
-// Mesh initialization and setup
+#ifdef ENABLE_LORA
+// Function to handle transmissions and update duty cycle
+void transmitWithDutyCycle(const String& message) {
+  if (isDutyCycleAllowed()) {
+    // Transmit message and record transmission time
+    tx_time = millis();
+    RADIOLIB(radio.transmit(message.c_str()));
+    tx_time = millis() - tx_time;
+
+    if (_radiolib_status == RADIOLIB_ERR_NONE) {
+      both.printf("Message transmitted successfully (%i ms)\n", (int)tx_time);
+    } else {
+      both.printf("Transmission failed (%i)\n", _radiolib_status);
+    }
+
+    // Update duty cycle constraints
+    minimum_pause = tx_time * 100;
+    last_tx = millis();
+  } else {
+    // Provide feedback on duty cycle status
+    both.printf("Duty cycle limit reached, please wait %i sec.\n", (int)((minimum_pause - (millis() - last_tx)) / 1000) + 1);
+  }
+  #ifdef ENABLE_DISPLAY
+  updateDisplay(); // Update display to reflect current duty cycle status
+  #endif
+}
+#endif
+
+// Setup Function
+void setup() {
+  // Initialize Serial, Heltec board, and LoRa radio using your original setup
+  Serial.begin(115200);
+
+  #ifdef ENABLE_DISPLAY
+  heltec_setup();
+  #endif
+
+  #ifdef ENABLE_LORA
+  // LoRa Radio Setup remains unchanged
+  RADIOLIB_OR_HALT(radio.begin());
+  radio.setDio1Action(rx);
+  RADIOLIB_OR_HALT(radio.setFrequency(FREQUENCY));
+  RADIOLIB_OR_HALT(radio.setBandwidth(BANDWIDTH));
+  RADIOLIB_OR_HALT(radio.setSpreadingFactor(SPREADING_FACTOR));
+  RADIOLIB_OR_HALT(radio.setOutputPower(TRANSMIT_POWER));
+  RADIOLIB_OR_HALT(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF));
+  #endif
+
+  // Meshify Initialization
+  WiFi.mode(WIFI_AP);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  WiFi.setSleep(false);
+  initMesh();               // Initialize the mesh network
+  setupServerRoutes();      // Set up web server routes
+  server.begin();           // Start the web server
+  dnsServer.start(53, "*", WiFi.softAPIP());  // Start DNS server for captive portal
+
+  #ifdef ENABLE_DISPLAY
+  // Initialize Display using your original setup
+  heltec_display_power(true); // Turn on display power if needed
+  display.init();
+  display.flipScreenVertically(); // Rotate the display to correct orientation
+  display.clear();
+  display.setFont(ArialMT_Plain_10); // Set the font as per your original settings
+
+  // Display Meshify title centered at the top
+  updateDisplay();
+  #endif
+
+  // Watchdog Timer Setup remains as per your original code
+  esp_task_wdt_init(10, true);
+  esp_task_wdt_add(NULL);
+}
+
+// Main Loop Function
+void loop() {
+  esp_task_wdt_reset(); // Reset watchdog timer to prevent resets
+
+  #ifdef ENABLE_DISPLAY
+  // Maintain the original Heltec loop functionality
+  heltec_loop();
+  #endif
+
+  #ifdef ENABLE_LORA
+  // Check if a LoRa message has been received
+  if (rxFlag) {
+    rxFlag = false;
+    radio.readData(rxdata);
+    if (_radiolib_status == RADIOLIB_ERR_NONE) {
+      // Extract message ID from LoRa data (expected format: "ID:sender:content")
+      int firstColonIndex = rxdata.indexOf(':');
+      int secondColonIndex = rxdata.indexOf(':', firstColonIndex + 1);
+      if (firstColonIndex > 0 && secondColonIndex > 0) {
+        String messageID = rxdata.substring(0, firstColonIndex);
+        String sender = rxdata.substring(firstColonIndex + 1, secondColonIndex);
+        String messageContent = rxdata.substring(secondColonIndex + 1);
+
+        // Check if the message ID has already been forwarded
+        if (!hasForwardedMessage(messageID)) {
+          // Forward the message over the mesh network
+          String forwardMessage = "LORA:" + messageID + ":" + sender + ":" + messageContent;
+          mesh.sendBroadcast(forwardMessage);
+          both.printf("RX [%s] -> Forwarded to Mesh\n", rxdata.c_str());
+
+          // Save the message and mark it as forwarded
+          rememberMessageID(messageID);
+          handleIncomingMessage(messageID, sender, messageContent, "[LoRa]");
+        }
+      }
+    }
+    RADIOLIB_OR_HALT(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF));
+  }
+  #endif
+
+  // Regularly update Mesh data
+  updateMeshData();
+
+  // Update the display regularly to reflect current mesh state
+  #ifdef ENABLE_DISPLAY
+  updateDisplay();
+  #endif
+
+  // Meshify Loop and handle web requests
+  dnsServer.processNextRequest();
+}
+
+#ifdef ENABLE_LORA
+// LoRa Packet Received Callback remains the same
+void rx() {
+  rxFlag = true;
+}
+#endif
+
+// Meshify Initialization Function
 void initMesh() {
   mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
   mesh.init(MESH_SSID, MESH_PASSWORD, MESH_PORT);
   mesh.onReceive(receivedCallback);
 
-  // Callback for when connections change
+  // Callback to update display when nodes change
   mesh.onChangedConnections([]() {
-    Serial.println("Mesh connection changed.");
-    #ifdef USE_DISPLAY
-    updateNodeDisplay(); // Update display when connections change
+    updateMeshData();
+    #ifdef ENABLE_DISPLAY
+    updateDisplay();
     #endif
   });
 
   mesh.setContainsRoot(false);
 }
 
-#ifdef USE_DISPLAY
-// Function to initialize balls with random positions and speeds
-void initializeBalls() {
-  for (int i = 0; i < numBalls; i++) {
-    balls[i].size = 4; // Set the size of each ball
-    balls[i].x = random(balls[i].size + 1, u8g2.getWidth() - balls[i].size - 1);
-    balls[i].y = random(balls[i].size + 1, u8g2.getHeight() - balls[i].size - 1);
-    balls[i].speedX = random(1, 4) * (random(0, 2) == 0 ? 1 : -1);
-    balls[i].speedY = random(1, 4) * (random(0, 2) == 0 ? 1 : -1);
+// Meshify Received Callback with WiFi Tag
+void receivedCallback(uint32_t from, String &message) {
+  Serial.printf("Received message from %u: %s\n", from, message.c_str());
+
+  // Extract message ID, sender, and content from received message
+  int firstColonIndex = message.indexOf(':');
+  int secondColonIndex = message.indexOf(':', firstColonIndex + 1);
+  if (firstColonIndex > 0 && secondColonIndex > 0) {
+    String messageID = message.substring(0, firstColonIndex);
+    String sender = message.substring(firstColonIndex + 1, secondColonIndex);
+    String messageContent = message.substring(secondColonIndex + 1);
+
+    // Check if the message has already been forwarded
+    if (!hasForwardedMessage(messageID)) {
+      // Forward the message over LoRa
+      #ifdef ENABLE_LORA
+      transmitWithDutyCycle(message);
+      both.printf("Mesh Message [%s] -> Sent via LoRa\n", message.c_str());
+      #endif
+
+      // Save and handle the message
+      rememberMessageID(messageID);
+      handleIncomingMessage(messageID, sender, messageContent, "[WiFi]");
+    }
   }
 }
 
-// Function to handle bouncing balls and collisions
-void displayBouncingBalls() {
-  u8g2.clearBuffer(); // Clear buffer before drawing new positions
-
-  for (int i = 0; i < numBalls; i++) {
-    // Update ball position
-    balls[i].x += balls[i].speedX;
-    balls[i].y += balls[i].speedY;
-
-    // Check for collisions with the display boundaries
-    if (balls[i].x - balls[i].size < 0) {
-      balls[i].x = balls[i].size;  // Correct position if ball goes out of bounds
-      balls[i].speedX = -balls[i].speedX;  // Reverse direction
-    } else if (balls[i].x + balls[i].size > u8g2.getWidth()) {
-      balls[i].x = u8g2.getWidth() - balls[i].size;  // Correct position if ball goes out of bounds
-      balls[i].speedX = -balls[i].speedX;  // Reverse direction
-    }
-
-    if (balls[i].y - balls[i].size < 0) {
-      balls[i].y = balls[i].size;  // Correct position if ball goes out of bounds
-      balls[i].speedY = -balls[i].speedY;  // Reverse direction
-    } else if (balls[i].y + balls[i].size > u8g2.getHeight()) {
-      balls[i].y = u8g2.getHeight() - balls[i].size;  // Correct position if ball goes out of bounds
-      balls[i].speedY = -balls[i].speedY;  // Reverse direction
-    }
-
-    // Check for collisions with other balls
-    for (int j = 0; j < numBalls; j++) {
-      if (i != j) {
-        int dx = balls[i].x - balls[j].x;
-        int dy = balls[i].y - balls[j].y;
-        int distanceSquared = dx * dx + dy * dy;
-        int collisionDistance = (balls[i].size + balls[j].size) * (balls[i].size + balls[j].size);
-
-        if (distanceSquared < collisionDistance) {
-          // Swap velocities upon collision
-          float tempSpeedX = balls[i].speedX;
-          float tempSpeedY = balls[i].speedY;
-          balls[i].speedX = balls[j].speedX;
-          balls[i].speedY = balls[j].speedY;
-          balls[j].speedX = tempSpeedX;
-          balls[j].speedY = tempSpeedY;
-        }
-      }
-    }
-
-    // Draw the ball at its new position
-    u8g2.drawDisc(balls[i].x, balls[i].y, balls[i].size);
-  }
-
-  u8g2.sendBuffer(); // Send the buffer to the display once all balls are drawn
-}
-
-// Function to update the OLED display
-void updateDisplay(const char* title, const char* nodeId, const char* nodeCount) {
-  if (!isAnimating) {
-    u8g2.clearBuffer();
-    int titleWidth = u8g2.getStrWidth(title);
-    u8g2.drawStr((128 - titleWidth) / 2, 10, title);
-    u8g2.drawStr(0, 30, nodeId);
-    u8g2.drawStr(0, 50, nodeCount);
-    u8g2.sendBuffer();
-  }
-}
-#endif
-
-// Function to serve HTML pages
-void serveHtml(AsyncWebServerRequest *request, const char* htmlContent) {
-  request->send(200, "text/html", htmlContent);
-}
-
-// Function to set up server routes
+// Server Routes Setup
 void setupServerRoutes() {
+  // Main page route
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     serveHtml(request, mainPageHtml);
   });
 
+  // Nodes list page route
   server.on("/nodes", HTTP_GET, [](AsyncWebServerRequest *request) {
     serveHtml(request, nodesPageHtml);
   });
 
+  // Fetch messages in JSON format
   server.on("/messages", HTTP_GET, [](AsyncWebServerRequest *request) {
     String json = "[";
     bool first = true;
@@ -331,7 +443,7 @@ void setupServerRoutes() {
       int index = (messageIndex - 1 - i + maxMessages) % maxMessages;
       if (messages[index].content != "") {
         if (!first) json += ",";
-        json += "{\"sender\":\"" + messages[index].sender + "\",\"message\":\"" + messages[index].content + "\"}";
+        json += "{\"sender\":\"" + messages[index].sender + "\",\"message\":\"" + messages[index].content + "\",\"source\":\"" + messages[index].source + "\"}";
         first = false;
       }
     }
@@ -339,11 +451,13 @@ void setupServerRoutes() {
     request->send(200, "application/json", "{\"messages\":" + json + "}");
   });
 
+  // Fetch device count information in JSON format
   server.on("/deviceCount", HTTP_GET, [](AsyncWebServerRequest *request) {
     updateMeshData(); // Centralized data update
     request->send(200, "application/json", "{\"totalCount\":" + String(getNodeCount()) + ", \"nodeId\":\"" + String(getNodeId()) + "\"}");
   });
 
+  // Fetch nodes data in JSON format
   server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest *request) {
     updateMeshData(); // Centralized data update
     String json = "[";
@@ -358,6 +472,7 @@ void setupServerRoutes() {
     request->send(200, "application/json", "{\"nodes\":" + json + "}");
   });
 
+  // Handle message updates from the form
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
     String newMessage = "";
     String senderName = "";
@@ -373,78 +488,36 @@ void setupServerRoutes() {
     senderName.replace("<", "&lt;");
     senderName.replace(">", "&gt;");
 
-    messages[messageIndex].content = newMessage;
-    messages[messageIndex].sender = senderName;
-    messageIndex = (messageIndex + 1) % maxMessages;
+    // Generate a unique ID for the new message
+    String messageID = generateMessageID();
+    String fullMessage = messageID + ":" + senderName + ":" + newMessage;
 
-    String message = "USER:" + senderName + ": " + newMessage;
-    mesh.sendBroadcast(message);
+    // Save and broadcast the message
+    handleIncomingMessage(messageID, senderName, newMessage, ""); // Empty source since it's a sent message
+    rememberMessageID(messageID); // Mark the message as forwarded
+    mesh.sendBroadcast(fullMessage); // Broadcast the message with ID
 
     request->redirect("/");
   });
 }
 
-void setup() {
-  Serial.begin(115200);
-
-  WiFi.mode(WIFI_AP);
-  WiFi.setTxPower(WIFI_POWER_19_5dBm);
-  WiFi.setSleep(false);                 // Disable Wi-Fi sleep mode
-
-  // Disable any automatic sleep or wake-up sources for the ESP32
-  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-
-  #ifdef USE_DISPLAY
-  pinMode(VEXT_ENABLE, OUTPUT);
-  digitalWrite(VEXT_ENABLE, LOW);
-  u8g2.begin();
-  u8g2.setFont(u8g2_font_ncenB08_tr);
-  updateDisplay("Meshify 1.0", "By Mark Coultous", "Loading");
-  #endif
-
-  initMesh();  // Ensure initMesh() is called here
-  #ifdef USE_DISPLAY
-  initializeBalls();
-  #endif
-
-  esp_task_wdt_init(10, true);
-  esp_task_wdt_add(NULL);
-
-  dnsServer.start(53, "*", WiFi.softAPIP());
-  setupServerRoutes();
-
-  server.begin();
+// HTML Serving Function remains the same
+void serveHtml(AsyncWebServerRequest *request, const char* htmlContent) {
+  request->send(200, "text/html", htmlContent);
 }
 
-void loop() {
-  esp_task_wdt_reset();
+// Centralized mesh data functions
+int getNodeCount() {
+  return totalNodeCount;
+}
 
-  mesh.update();
-  dnsServer.processNextRequest();
+uint32_t getNodeId() {
+  return currentNodeId;
+}
 
-  unsigned long currentMillis = millis();
-
-  // Regular update to display the latest node data
-  #ifdef USE_DISPLAY
-  if (!isAnimating && (currentMillis - previousMillis >= interval)) {
-    previousMillis = currentMillis;
-    updateNodeDisplay(); // Ensure display is updated regularly
-  }
-
-  // Animation logic for bouncing balls
-  if (currentMillis - animationPreviousMillis >= animationInterval && !isAnimating) {
-    isAnimating = true;
-    animationPreviousMillis = currentMillis;
-  }
-
-  if (isAnimating && (currentMillis - animationPreviousMillis < animationDuration)) {
-    esp_task_wdt_reset();
-    displayBouncingBalls();
-  } else if (isAnimating && (currentMillis - animationPreviousMillis >= animationDuration)) {
-    isAnimating = false;
-    animationPreviousMillis = currentMillis;
-    updateNodeDisplay(); // Update the display after animation ends
-  }
-  #endif
+// Function to update centralized mesh data
+void updateMeshData() {
+  mesh.update(); // Ensure the mesh is updated
+  totalNodeCount = mesh.getNodeList().size();
+  currentNodeId = mesh.getNodeId();
 }
