@@ -22,7 +22,7 @@
 #define FREQUENCY 866.3
 #define BANDWIDTH 250.0
 #define SPREADING_FACTOR 9
-#define TRANSMIT_POWER 0
+#define TRANSMIT_POWER 22
 #endif
 
 // Meshify Parameters
