@@ -1,9 +1,9 @@
 // Define flags to enable or disable features for use with (Heltec Lora 32 V3 ONLY)
-//#define ENABLE_LORA // Comment this line to disable LoRa functionality
-//#define ENABLE_DISPLAY // Comment this line to disable OLED display functionality
+#define ENABLE_LORA // Comment this line to disable LoRa functionality
+#define ENABLE_DISPLAY // Comment this line to disable OLED display functionality
 
 // Includes and Definitions
-#ifdef ENABLE_DISPLAY
+#ifdef ENABLE_DISPLAY 
 #define HELTEC_POWER_BUTTON // Use the power button feature of Heltec
 #include <heltec_unofficial.h> // Heltec library for OLED and LoRa
 #endif
@@ -18,9 +18,9 @@
 
 // LoRa Parameters
 #ifdef ENABLE_LORA
-#define PAUSE 300
+#define PAUSE 30  // Adjusted from 300 to 30 for 10% duty cycle
 #define FREQUENCY 866.3
-#define BANDWIDTH 250.0
+#define BANDWIDTH 125.0
 #define SPREADING_FACTOR 9
 #define TRANSMIT_POWER 22
 #endif
@@ -262,12 +262,13 @@ void transmitWithDutyCycle(const String& message) {
     }
 
     // Update duty cycle constraints
-    minimum_pause = tx_time * 100;
+    minimum_pause = tx_time * 10;  // Adjust this line from tx_time * 100 to tx_time * 10 for 10% duty cycle
     last_tx = millis();
   } else {
     // Provide feedback on duty cycle status
     both.printf("Duty cycle limit reached, please wait %i sec.\n", (int)((minimum_pause - (millis() - last_tx)) / 1000) + 1);
   }
+  
   #ifdef ENABLE_DISPLAY
   updateDisplay(); // Update display to reflect current duty cycle status
   #endif
