@@ -1,6 +1,6 @@
 // Define flags to enable or disable features for use with (Heltec Lora 32 V3 ONLY)
-#define ENABLE_LORA // Comment this line to disable LoRa functionality
-#define ENABLE_DISPLAY // Comment this line to disable OLED display functionality
+//#define ENABLE_LORA // Comment this line to disable LoRa functionality
+//#define ENABLE_DISPLAY // Comment this line to disable OLED display functionality
 
 // Includes and Definitions
 #ifdef ENABLE_DISPLAY 
