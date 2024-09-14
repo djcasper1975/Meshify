@@ -1,10 +1,17 @@
-#define ENABLE_LORA
-#define ENABLE_DISPLAY
+// User Configuration - Uncomment the appropriate line to select your board
+//#define COMPILE_ESP32 // Use this line if compiling for a standard ESP32
+#define COMPILE_HELTEC // Use this line if compiling for Heltec LoRa 32 V3
+
+// Feature Toggles
+#ifdef COMPILE_HELTEC
+    #define ENABLE_LORA // Enable LoRa functionality
+    #define ENABLE_DISPLAY // Enable OLED display functionality
+#endif
 
 // Includes and Definitions
 #ifdef ENABLE_DISPLAY
-#define HELTEC_POWER_BUTTON // Use the power button feature of Heltec
-#include <heltec_unofficial.h> // Heltec library for OLED and LoRa
+    #define HELTEC_POWER_BUTTON // Use the power button feature of Heltec
+    #include <heltec_unofficial.h> // Heltec library for OLED and LoRa
 #endif
 
 #include <painlessMesh.h>
@@ -18,42 +25,42 @@
 
 // LoRa Parameters
 #ifdef ENABLE_LORA
-#include <RadioLib.h>
-#define PAUSE 300  // Duty cycle for LoRa (affects only LoRa transmissions)
-#define FREQUENCY 866.3
-#define BANDWIDTH 125.0
-#define SPREADING_FACTOR 9
-#define TRANSMIT_POWER 22
-String rxdata;
-volatile bool rxFlag = false;
-long counter = 0;
-uint64_t tx_time;
-uint64_t last_tx = 0;
-uint64_t minimum_pause = 0;
-unsigned long lastTransmitTime = 0; // Timing variable for managing sequential transmissions
-String fullMessage; // Global variable to hold the message for sequential transmission
+    #include <RadioLib.h>
+    #define PAUSE 300  // Duty cycle for LoRa (affects only LoRa transmissions)
+    #define FREQUENCY 866.3
+    #define BANDWIDTH 125.0
+    #define SPREADING_FACTOR 9
+    #define TRANSMIT_POWER 22
+    String rxdata;
+    volatile bool rxFlag = false;
+    long counter = 0;
+    uint64_t tx_time;
+    uint64_t last_tx = 0;
+    uint64_t minimum_pause = 0;
+    unsigned long lastTransmitTime = 0; // Timing variable for managing sequential transmissions
+    String fullMessage; // Global variable to hold the message for sequential transmission
 
-// Function to handle LoRa received packets
-void rx() {
-  rxFlag = true;
-}
+    // Function to handle LoRa received packets
+    void rx() {
+      rxFlag = true;
+    }
 
-void setupLora() {
-  heltec_setup(); // Initialize Heltec board, display, and other components if display is enabled
-  Serial.println("Initializing LoRa radio...");
+    void setupLora() {
+      heltec_setup(); // Initialize Heltec board, display, and other components if display is enabled
+      Serial.println("Initializing LoRa radio...");
 
-  // Initialize the LoRa radio with specified parameters
-  RADIOLIB_OR_HALT(radio.begin());
-  radio.setDio1Action(rx);
+      // Initialize the LoRa radio with specified parameters
+      RADIOLIB_OR_HALT(radio.begin());
+      radio.setDio1Action(rx);
 
-  RADIOLIB_OR_HALT(radio.setFrequency(FREQUENCY));
-  RADIOLIB_OR_HALT(radio.setBandwidth(BANDWIDTH));
-  RADIOLIB_OR_HALT(radio.setSpreadingFactor(SPREADING_FACTOR));
-  RADIOLIB_OR_HALT(radio.setOutputPower(TRANSMIT_POWER));
+      RADIOLIB_OR_HALT(radio.setFrequency(FREQUENCY));
+      RADIOLIB_OR_HALT(radio.setBandwidth(BANDWIDTH));
+      RADIOLIB_OR_HALT(radio.setSpreadingFactor(SPREADING_FACTOR));
+      RADIOLIB_OR_HALT(radio.setOutputPower(TRANSMIT_POWER));
 
-  // Start receiving
-  RADIOLIB_OR_HALT(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF));
-}
+      // Start receiving
+      RADIOLIB_OR_HALT(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF));
+    }
 #endif
 
 // Meshify Parameters
@@ -214,147 +221,6 @@ void transmitViaWiFi(const String& message) {
   lastTransmitTime = millis(); // Record the time of WiFi transmission
 }
 
-// Main HTML Page Content
-const char mainPageHtml[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-  body { font-family: Arial, sans-serif; margin: 0; padding: 0; text-align: center; }
-  h1, h2 { color: #333; }
-  form { margin: 20px auto; max-width: 500px; }
-  input[type=text], input[type=submit] { width: calc(100% - 22px); padding: 10px; margin: 10px 0; box-sizing: border-box; }
-  input[type=submit] { background-color: #007BFF; color: white; border: none; border-radius: 5px; cursor: pointer; }
-  input[type=submit]:hover { background-color: #0056b3; }
-  ul { list-style-type: none; padding: 0; margin: 20px auto; max-width: 500px; }
-  li { background-color: #f9f9f9; margin: 5px 0; padding: 10px; border-radius: 5px; word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; }
-  #deviceCount { margin: 20px auto; max-width: 500px; }
-  .warning { color: red; margin-bottom: 20px; }
-  .wifi { color: blue; }
-  .lora { color: orange; }
-</style>
-<script>
-function fetchData() {
-  fetch('/messages')
-    .then(response => {
-      if (!response.ok) throw new Error('Failed to fetch messages');
-      return response.json();
-    })
-    .then(data => {
-      const ul = document.getElementById('messageList');
-      ul.innerHTML = '';
-      data.messages.forEach(msg => {
-        const li = document.createElement('li');
-        const tagClass = msg.source === '[LoRa]' ? 'lora' : 'wifi';
-
-        // Display message according to specified format
-        if (msg.nodeId === localStorage.getItem('nodeId')) {
-          // For messages sent by this node, show only sender and message
-          li.innerHTML = ${msg.sender}: ${msg.message};
-        } else {
-          // For messages from other nodes, display source, node ID, sender, and message
-          li.innerHTML = <span class="${tagClass}">${msg.source}</span> ${msg.nodeId}: ${msg.sender}: ${msg.message};
-        }
-        ul.appendChild(li); // Add each new message at the end to maintain correct order
-      });
-    })
-    .catch(error => {
-      console.error('Error fetching messages:', error);
-      setTimeout(() => location.reload(), 5000);
-    });
-
-  fetch('/deviceCount')
-    .then(response => {
-      if (!response.ok) throw new Error('Failed to fetch device count');
-      return response.json();
-    })
-    .then(data => {
-      // Store the current node ID for comparison
-      localStorage.setItem('nodeId', data.nodeId);
-      document.getElementById('deviceCount').textContent =
-        'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + data.nodeId;
-    })
-    .catch(error => {
-      console.error('Error fetching device count:', error);
-      setTimeout(() => location.reload(), 5000);
-    });
-}
-
-window.onload = function() {
-  loadName();
-  fetchData();
-  setInterval(fetchData, 5000); // Fetch data every 5 seconds to ensure synchronized updates
-};
-
-function saveName() {
-  const nameInput = document.getElementById('nameInput');
-  localStorage.setItem('username', nameInput.value);
-}
-
-function loadName() {
-  const savedName = localStorage.getItem('username');
-  if (savedName) {
-    document.getElementById('nameInput').value = savedName;
-  }
-}
-</script>
-
-</head>
-<body>
-<h2>Meshify 1.0</h2>
-<div class='warning'>For your safety, do not share your location or any personal information!</div>
-<form action="/update" method="POST" onsubmit="saveName()">
-  <input type="text" id="nameInput" name="sender" placeholder="Enter your name" required maxlength="25" />
-  <input type="text" name="msg" placeholder="Enter your message" required maxlength="256" />
-  <input type="submit" value="Send" />
-</form>
-<div id='deviceCount'>Mesh Nodes: 0</div>
-<a href="/nodes">View Mesh Nodes List</a><br>
-<ul id='messageList'></ul>
-<p>github.com/djcasper1975</p>
-</body>
-</html>
-)rawliteral";
-
-// Nodes List HTML Page Content
-const char nodesPageHtml[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-  body { font-family: Arial, sans-serif; margin: 0; padding: 0; text-align: center; }
-  h1, h2 { color: #333; }
-  ul { list-style-type: none; padding: 0; margin: 20px auto; max-width: 500px; }
-  li { background-color: #f9f9f9; margin: 5px 0; padding: 10px; border-radius: 5px; word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; }
-  #nodeCount { margin: 20px auto; max-width: 500px; }
-</style>
-<script>
-function fetchNodes() {
-  fetch('/nodesData').then(response => response.json()).then(data => {
-    const ul = document.getElementById('nodeList');
-    ul.innerHTML = data.nodes.map((node, index) => <li>Node ${index + 1}: ${node}</li>).join('');
-    document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
-  })
-  .catch(error => console.error('Error fetching nodes:', error));
-}
-window.onload = function() {
-  fetchNodes();
-  setInterval(fetchNodes, 5000);
-};
-</script>
-</head>
-<body>
-<h2>Mesh Nodes Connected</h2>
-<div id='nodeCount'>Mesh Nodes Connected: 0</div>
-<ul id='nodeList'></ul>
-<a href="/">Back to Main Page</a>
-</body>
-</html>
-)rawliteral";
-
-// Setup Function
 void setup() {
   Serial.begin(115200);
 
@@ -386,7 +252,6 @@ void setup() {
   esp_task_wdt_add(NULL);
 }
 
-// Main Loop Function
 void loop() {
   esp_task_wdt_reset();
 
@@ -485,6 +350,146 @@ void receivedCallback(uint32_t from, String &message) {
     Serial.printf("Mesh Message [%s] -> Sent via WiFi, pending LoRa\n", message.c_str());
   }
 }
+
+// Main HTML Page Content
+const char mainPageHtml[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { font-family: Arial, sans-serif; margin: 0; padding: 0; text-align: center; }
+  h1, h2 { color: #333; }
+  form { margin: 20px auto; max-width: 500px; }
+  input[type=text], input[type=submit] { width: calc(100% - 22px); padding: 10px; margin: 10px 0; box-sizing: border-box; }
+  input[type=submit] { background-color: #007BFF; color: white; border: none; border-radius: 5px; cursor: pointer; }
+  input[type=submit]:hover { background-color: #0056b3; }
+  ul { list-style-type: none; padding: 0; margin: 20px auto; max-width: 500px; }
+  li { background-color: #f9f9f9; margin: 5px 0; padding: 10px; border-radius: 5px; word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; }
+  #deviceCount { margin: 20px auto; max-width: 500px; }
+  .warning { color: red; margin-bottom: 20px; }
+  .wifi { color: blue; }
+  .lora { color: orange; }
+</style>
+<script>
+function fetchData() {
+  fetch('/messages')
+    .then(response => {
+      if (!response.ok) throw new Error('Failed to fetch messages');
+      return response.json();
+    })
+    .then(data => {
+      const ul = document.getElementById('messageList');
+      ul.innerHTML = '';
+      data.messages.forEach(msg => {
+        const li = document.createElement('li');
+        const tagClass = msg.source === '[LoRa]' ? 'lora' : 'wifi';
+
+        // Display message according to specified format
+        if (msg.nodeId === localStorage.getItem('nodeId')) {
+          // For messages sent by this node, show only sender and message
+          li.innerHTML = `${msg.sender}: ${msg.message}`;
+        } else {
+          // For messages from other nodes, display source, node ID, sender, and message
+          li.innerHTML = `<span class="${tagClass}">${msg.source}</span> ${msg.nodeId}: ${msg.sender}: ${msg.message}`;
+        }
+        ul.appendChild(li); // Add each new message at the end to maintain correct order
+      });
+    })
+    .catch(error => {
+      console.error('Error fetching messages:', error);
+      setTimeout(() => location.reload(), 5000);
+    });
+
+  fetch('/deviceCount')
+    .then(response => {
+      if (!response.ok) throw new Error('Failed to fetch device count');
+      return response.json();
+    })
+    .then(data => {
+      // Store the current node ID for comparison
+      localStorage.setItem('nodeId', data.nodeId);
+      document.getElementById('deviceCount').textContent =
+        'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + data.nodeId;
+    })
+    .catch(error => {
+      console.error('Error fetching device count:', error);
+      setTimeout(() => location.reload(), 5000);
+    });
+}
+
+window.onload = function() {
+  loadName();
+  fetchData();
+  setInterval(fetchData, 5000); // Fetch data every 5 seconds to ensure synchronized updates
+};
+
+function saveName() {
+  const nameInput = document.getElementById('nameInput');
+  localStorage.setItem('username', nameInput.value);
+}
+
+function loadName() {
+  const savedName = localStorage.getItem('username');
+  if (savedName) {
+    document.getElementById('nameInput').value = savedName;
+  }
+}
+</script>
+
+</head>
+<body>
+<h2>Meshify 1.0</h2>
+<div class='warning'>For your safety, do not share your location or any personal information!</div>
+<form action="/update" method="POST" onsubmit="saveName()">
+  <input type="text" id="nameInput" name="sender" placeholder="Enter your name" required maxlength="25" />
+  <input type="text" name="msg" placeholder="Enter your message" required maxlength="256" />
+  <input type="submit" value="Send" />
+</form>
+<div id='deviceCount'>Mesh Nodes: 0</div>
+<a href="/nodes">View Mesh Nodes List</a><br>
+<ul id='messageList'></ul>
+<p>github.com/djcasper1975</p>
+</body>
+</html>
+)rawliteral";
+
+// Nodes List HTML Page Content
+const char nodesPageHtml[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { font-family: Arial, sans-serif; margin: 0; padding: 0; text-align: center; }
+  h1, h2 { color: #333; }
+  ul { list-style-type: none; padding: 0; margin: 20px auto; max-width: 500px; }
+  li { background-color: #f9f9f9; margin: 5px 0; padding: 10px; border-radius: 5px; word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; }
+  #nodeCount { margin: 20px auto; max-width: 500px; }
+</style>
+<script>
+function fetchNodes() {
+  fetch('/nodesData').then(response => response.json()).then(data => {
+    const ul = document.getElementById('nodeList');
+    ul.innerHTML = data.nodes.map((node, index) => `<li>Node ${index + 1}: ${node}</li>`).join('');
+    document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
+  })
+  .catch(error => console.error('Error fetching nodes:', error));
+}
+window.onload = function() {
+  fetchNodes();
+  setInterval(fetchNodes, 5000);
+};
+</script>
+</head>
+<body>
+<h2>Mesh Nodes Connected</h2>
+<div id='nodeCount'>Mesh Nodes Connected: 0</div>
+<ul id='nodeList'></ul>
+<a href="/">Back to Main Page</a>
+</body>
+</html>
+)rawliteral";
 
 // Server Routes Setup
 void setupServerRoutes() {
