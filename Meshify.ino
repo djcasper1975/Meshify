@@ -155,8 +155,8 @@ function loadName() {
 <h2>Meshify 1.0</h2>
 <div class='warning'>For your safety, do not share your location or any personal information!</div>
 <form action="/update" method="POST" onsubmit="saveName()">
-  <input type="text" id="nameInput" name="sender" placeholder="Enter your name" required maxlength="25" />
-  <input type="text" name="msg" placeholder="Enter your message" required maxlength="256" />
+  <input type="text" id="nameInput" name="sender" placeholder="Enter your name" required maxlength="20" />
+  <input type="text" name="msg" placeholder="Enter your message" required maxlength="180" />
   <input type="submit" value="Send" />
 </form>
 <div id='deviceCount'>Mesh Nodes: 0, Node ID: 0</div>
