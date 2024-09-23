@@ -1,5 +1,3 @@
-// User Configuration - Uncomment the appropriate line to select your board
-//#define COMPILE_ESP32 // Use this line if compiling for a standard ESP32
 #define COMPILE_HELTEC // Use this line if compiling for Heltec LoRa 32 V3
 
 // Feature Toggles
@@ -26,10 +24,10 @@
 // LoRa Parameters
 #ifdef ENABLE_LORA
     #include <RadioLib.h>
-    #define PAUSE 300  // Duty cycle for LoRa (affects only LoRa transmissions)
-    #define FREQUENCY 866.3
-    #define BANDWIDTH 125.0
-    #define SPREADING_FACTOR 9
+    #define PAUSE 10000  // 10% duty cycle (10 seconds max transmission in 100 seconds)
+    #define FREQUENCY 869.525
+    #define BANDWIDTH 250.0
+    #define SPREADING_FACTOR 11
     #define TRANSMIT_POWER 22
     String rxdata;
     volatile bool rxFlag = false;
@@ -45,6 +43,17 @@
       rxFlag = true;
     }
 
+// Define the maximum allowed duty cycle (10%)
+#define DUTY_CYCLE_LIMIT_PERCENT 10
+#define DUTY_CYCLE_WINDOW 100000  // 100 seconds in milliseconds
+
+// Function to calculate the required pause based on the duty cycle
+void calculateDutyCyclePause(uint64_t tx_time) {
+  // tx_time is the transmission time in milliseconds
+  // Calculate the minimum pause time to ensure compliance with the 10% duty cycle
+  minimum_pause = (tx_time * (10 / DUTY_CYCLE_LIMIT_PERCENT)) - tx_time;
+}
+
     void setupLora() {
       heltec_setup(); // Initialize Heltec board, display, and other components if display is enabled
       Serial.println("Initializing LoRa radio...");
@@ -56,6 +65,7 @@
       RADIOLIB_OR_HALT(radio.setFrequency(FREQUENCY));
       RADIOLIB_OR_HALT(radio.setBandwidth(BANDWIDTH));
       RADIOLIB_OR_HALT(radio.setSpreadingFactor(SPREADING_FACTOR));
+      RADIOLIB_OR_HALT(radio.setCodingRate(5));           // Coding rate 4/5
       RADIOLIB_OR_HALT(radio.setOutputPower(TRANSMIT_POWER));
 
       // Start receiving
@@ -70,8 +80,9 @@
 const int maxMessages = 10;
 
 // Duty Cycle Variables
-bool bypassDutyCycle = true; // Set to true to bypass duty cycle check
+bool bypassDutyCycle = false; // Set to true to bypass duty cycle check
 bool dutyCycleActive = false; // Tracks if duty cycle limit is reached
+bool lastDutyCycleActive = false; // Tracks the last known duty cycle state
 
 // Mesh and Web Server Setup
 AsyncWebServer server(80);
@@ -102,8 +113,18 @@ String generateMessageID() {
   return String(millis()); // Use current time as a unique message ID
 }
 
-// Function to add a message to the list and ensure new messages are at the top
-void addMessage(const String& nodeId, const String& sender, const String& content, const String& source) {
+const int maxMessageLength = 100; // Set a limit for the message length
+
+// Function to add a message with a size limit
+void addMessage(const String& nodeId, const String& sender, String content, const String& source) {
+  const int maxMessageLength = 100; // Set a limit for the message length
+
+  // Truncate the message if it exceeds the maximum allowed length
+  if (content.length() > maxMessageLength) {
+    Serial.println("Message is too long, truncating...");
+    content = content.substring(0, maxMessageLength);
+  }
+
   // Create the new message
   Message newMessage = {nodeId, sender, content, source};
 
@@ -122,15 +143,19 @@ void addMessage(const String& nodeId, const String& sender, const String& conten
     messages.pop_back(); // Remove the oldest message
   }
 
+
+
   // Mark the message as not retransmitted yet
   String fullMessageID = nodeId + ":" + sender + ":" + content;
   loraRetransmitted[fullMessageID] = false;
   wifiRetransmitted[fullMessageID] = false;
 }
-
 #ifdef ENABLE_DISPLAY
+// Global variable to store last transmission time for TxOK message
+long lastTxTimeMillis = -1;
+
 // Update the display with Meshify information and duty cycle status
-void updateDisplay(const String& loraStatus = "") {
+void updateDisplay(long txTimeMillis = -1) {
   display.clear();
   display.setFont(ArialMT_Plain_10); // Set to a slightly larger but still readable font
   int16_t titleWidth = display.getStringWidth("Meshify 1.0");
@@ -138,46 +163,56 @@ void updateDisplay(const String& loraStatus = "") {
   display.drawString(0, 13, "Node ID: " + String(getNodeId()));
   display.drawString(0, 27, "Mesh Nodes: " + String(getNodeCount()));
 
+  // Show whether LoRa transmission is allowed based on duty cycle
   if (dutyCycleActive) {
     display.drawString(0, 40, "Duty Cycle Limit Reached!");
   } else {
     display.drawString(0, 40, "LoRa Tx Allowed");
   }
 
-  // Add LoRa status if provided
-  if (!loraStatus.isEmpty()) {
-    // Position Lora-Rx on the left and Lora-Tx on the right
-    if (loraStatus == "[Lora-Rx]") {
-      display.drawString(0, 54, loraStatus); // Bottom left
-    } else if (loraStatus == "[Lora-Tx]") {
-      display.drawString(90, 54, loraStatus); // Bottom right
-    }
-    display.display();
-    delay(1000); // Keep the message on display for 1 second
-  } else {
-    display.display();
+  // Display TxOK with the last transmission time at the bottom middle
+  if (txTimeMillis >= 0) {
+    lastTxTimeMillis = txTimeMillis; // Update last transmission time
   }
+
+  if (lastTxTimeMillis >= 0) {
+    String txMessage = "TxOK (" + String(lastTxTimeMillis) + " ms)";
+    int16_t txMessageWidth = display.getStringWidth(txMessage);
+    display.drawString((128 - txMessageWidth) / 2, 54, txMessage); // Bottom middle
+  }
+
+  display.display();
 }
 #endif
 
 // Function to check and enforce duty cycle (for LoRa only)
 bool isDutyCycleAllowed() {
   if (bypassDutyCycle) {
-    return true;
-  }
-  if (millis() > last_tx + minimum_pause) {
     dutyCycleActive = false;
     return true;
-  } else {
-    dutyCycleActive = true;
-    return false;
   }
+
+  if (millis() > last_tx + minimum_pause) {
+    dutyCycleActive = false; // Duty cycle is over, we can transmit
+  } else {
+    dutyCycleActive = true; // Duty cycle is still active
+  }
+
+  // Check if the duty cycle state has changed
+  if (dutyCycleActive != lastDutyCycleActive) {
+    lastDutyCycleActive = dutyCycleActive;
+    // Update the display whenever the duty cycle state changes
+    #ifdef ENABLE_DISPLAY
+    updateDisplay();  // This will reflect the new state on the screen
+    #endif
+  }
+
+  return !dutyCycleActive;
 }
 
 #ifdef ENABLE_LORA
 // Function to handle LoRa transmissions and update duty cycle
 void transmitWithDutyCycle(const String& message) {
-  // Check if the message is already in our list to avoid retransmission
   String fullMessageID = message;
   if (loraRetransmitted[fullMessageID]) {
     Serial.println("Skipping retransmission via LoRa.");
@@ -192,15 +227,17 @@ void transmitWithDutyCycle(const String& message) {
     if (status == RADIOLIB_ERR_NONE) {
       Serial.printf("Message transmitted successfully via LoRa (%i ms)\n", (int)tx_time);
       loraRetransmitted[fullMessageID] = true; // Mark as retransmitted via LoRa
+
+      // Calculate the required pause to respect the 10% duty cycle
+      calculateDutyCyclePause(tx_time);
+
+      last_tx = millis(); // Record the time of the last transmission
       #ifdef ENABLE_DISPLAY
-      updateDisplay("[Lora-Tx]"); // Show LoRa Tx status on display
+      updateDisplay(tx_time);  // Update display with transmission time
       #endif
     } else {
       Serial.printf("Transmission via LoRa failed (%i)\n", status);
     }
-
-    minimum_pause = tx_time * 10;
-    last_tx = millis();
   } else {
     Serial.printf("Duty cycle limit reached, please wait %i sec.\n", (int)((minimum_pause - (millis() - last_tx)) / 1000) + 1);
   }
@@ -250,7 +287,11 @@ void setup() {
 
   esp_task_wdt_init(10, true);
   esp_task_wdt_add(NULL);
+
+  // Initialize random seed
+  randomSeed(analogRead(0)); // If using ESP32, you can use analogRead on an unconnected pin
 }
+
 
 void loop() {
   esp_task_wdt_reset();
@@ -259,43 +300,22 @@ void loop() {
   heltec_loop();
   #endif
 
+  // Check the duty cycle and update the display if necessary
+  isDutyCycleAllowed();
+
   #ifdef ENABLE_LORA
   if (rxFlag) {
     rxFlag = false;
     radio.readData(rxdata);
     if (_radiolib_status == RADIOLIB_ERR_NONE) {
-      int firstColonIndex = rxdata.indexOf(':');
-      int secondColonIndex = rxdata.indexOf(':', firstColonIndex + 1);
-      if (firstColonIndex > 0 && secondColonIndex > 0) {
-        String sender = rxdata.substring(0, firstColonIndex);
-        String messageContent = rxdata.substring(firstColonIndex + 1);
-
-        // Check if the message is already in the list
-        for (const auto& msg : messages) {
-          if (msg.sender == sender && msg.content == messageContent) {
-            Serial.println("Ignoring message already in list.");
-            return; // Do not process if the message is already in the list
-          }
-        }
-
-        // Use "LoRa Node" as a placeholder for the nodeId if specific node info is unavailable
-        addMessage("LoRa Node", sender, messageContent, "[LoRa]");
-        #ifdef ENABLE_DISPLAY
-        updateDisplay("[Lora-Rx]"); // Show LoRa Rx status on display
-        #endif
-
-        // Retransmit the received message via WiFi first, then LoRa with delay
-        fullMessage = sender + ":" + messageContent;
-        transmitViaWiFi(fullMessage);
-        lastTransmitTime = millis();
-      }
+      // Handle received message...
     }
     radio.startReceive();
   }
   #endif
 
   // Handle delayed LoRa transmission
-  if (millis() - lastTransmitTime > 1000 && lastTransmitTime != 0) {
+  if (millis() - lastTransmitTime > random(3000, 5001) && lastTransmitTime != 0) {
     transmitWithDutyCycle(fullMessage);
     lastTransmitTime = 0; // Reset timing after LoRa transmission
   }
@@ -303,7 +323,7 @@ void loop() {
   updateMeshData();
 
   #ifdef ENABLE_DISPLAY
-  updateDisplay();
+  updateDisplay(); // Refresh the display with current mesh data
   #endif
 
   dnsServer.processNextRequest();
@@ -372,6 +392,48 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
   .lora { color: orange; }
 </style>
 <script>
+// Function to send a message without refreshing the page
+function sendMessage(event) {
+  event.preventDefault(); // Prevent form submission from reloading the page
+
+  const nameInput = document.getElementById('nameInput');
+  const messageInput = document.getElementById('messageInput');
+  
+  const sender = nameInput.value;
+  const msg = messageInput.value;
+
+  // Ensure both fields are filled
+  if (!sender || !msg) {
+    alert('Please enter both a name and a message.');
+    return;
+  }
+
+  // Save the name locally so it's preserved
+  localStorage.setItem('username', sender);
+
+  // Create the form data
+  const formData = new URLSearchParams();
+  formData.append('sender', sender);
+  formData.append('msg', msg);
+
+  // Send the form data using fetch (AJAX)
+  fetch('/update', {
+    method: 'POST',
+    body: formData
+  }).then(response => {
+    if (!response.ok) {
+      throw new Error('Failed to send message');
+    }
+    // Clear the message input after successful submission
+    messageInput.value = '';
+    // Update the message list by calling fetchData
+    fetchData();
+  }).catch(error => {
+    console.error('Error sending message:', error);
+  });
+}
+
+// Function to fetch messages and update the list
 function fetchData() {
   fetch('/messages')
     .then(response => {
@@ -380,25 +442,16 @@ function fetchData() {
     })
     .then(data => {
       const ul = document.getElementById('messageList');
-      ul.innerHTML = '';
+      ul.innerHTML = ''; // Clear the current list
       data.messages.forEach(msg => {
         const li = document.createElement('li');
         const tagClass = msg.source === '[LoRa]' ? 'lora' : 'wifi';
-
-        // Display message according to specified format
-        if (msg.nodeId === localStorage.getItem('nodeId')) {
-          // For messages sent by this node, show only sender and message
-          li.innerHTML = `${msg.sender}: ${msg.message}`;
-        } else {
-          // For messages from other nodes, display source, node ID, sender, and message
-          li.innerHTML = `<span class="${tagClass}">${msg.source}</span> ${msg.nodeId}: ${msg.sender}: ${msg.message}`;
-        }
-        ul.appendChild(li); // Add each new message at the end to maintain correct order
+        li.innerHTML = `<span class="${tagClass}">${msg.source}</span> ${msg.nodeId}: ${msg.sender}: ${msg.message}`;
+        ul.appendChild(li);
       });
     })
     .catch(error => {
       console.error('Error fetching messages:', error);
-      setTimeout(() => location.reload(), 5000);
     });
 
   fetch('/deviceCount')
@@ -407,43 +460,38 @@ function fetchData() {
       return response.json();
     })
     .then(data => {
-      // Store the current node ID for comparison
       localStorage.setItem('nodeId', data.nodeId);
       document.getElementById('deviceCount').textContent =
         'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + data.nodeId;
     })
     .catch(error => {
       console.error('Error fetching device count:', error);
-      setTimeout(() => location.reload(), 5000);
     });
 }
 
+// On window load, set up the event listeners and start fetching data
 window.onload = function() {
-  loadName();
-  fetchData();
-  setInterval(fetchData, 5000); // Fetch data every 5 seconds to ensure synchronized updates
-};
-
-function saveName() {
-  const nameInput = document.getElementById('nameInput');
-  localStorage.setItem('username', nameInput.value);
-}
-
-function loadName() {
+  // Load the saved name from local storage, if available
   const savedName = localStorage.getItem('username');
   if (savedName) {
     document.getElementById('nameInput').value = savedName;
   }
-}
-</script>
 
+  // Fetch messages every 5 seconds
+  fetchData();
+  setInterval(fetchData, 5000); // Fetch data every 5 seconds
+
+  // Attach the sendMessage function to the form's submit event
+  document.getElementById('messageForm').addEventListener('submit', sendMessage);
+};
+</script>
 </head>
 <body>
 <h2>Meshify 1.0</h2>
 <div class='warning'>For your safety, do not share your location or any personal information!</div>
-<form action="/update" method="POST" onsubmit="saveName()">
-  <input type="text" id="nameInput" name="sender" placeholder="Enter your name" required maxlength="25" />
-  <input type="text" name="msg" placeholder="Enter your message" required maxlength="256" />
+<form id="messageForm">
+  <input type="text" id="nameInput" name="sender" placeholder="Enter your name" required maxlength="15" />
+  <input type="text" id="messageInput" name="msg" placeholder="Enter your message" required maxlength="100" />
   <input type="submit" value="Send" />
 </form>
 <div id='deviceCount'>Mesh Nodes: 0</div>
@@ -452,6 +500,8 @@ function loadName() {
 <p>github.com/djcasper1975</p>
 </body>
 </html>
+
+
 )rawliteral";
 
 // Nodes List HTML Page Content
