@@ -13,10 +13,6 @@
 #define MESH_PORT 5555
 const int maxMessages = 10;
 
-// Duty Cycle Variables
-bool bypassDutyCycle = true; // Set to true to bypass duty cycle check
-bool dutyCycleActive = false; // Tracks if duty cycle limit is reached
-
 // Mesh and Web Server Setup
 AsyncWebServer server(80);
 DNSServer dnsServer;
@@ -103,7 +99,19 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
 </style>
 <script>
 function fetchData() {
-  fetch('/messages')
+  let currentNodeId = null;
+
+  // Fetch current node information first
+  fetch('/deviceCount')
+    .then(response => response.json())
+    .then(data => {
+      currentNodeId = data.nodeId;
+      document.getElementById('deviceCount').textContent =
+        'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + currentNodeId;
+      
+      // Fetch messages once we have the current node ID
+      return fetch('/messages');
+    })
     .then(response => response.json())
     .then(data => {
       const ul = document.getElementById('messageList');
@@ -111,23 +119,19 @@ function fetchData() {
       data.messages.forEach(msg => {
         const li = document.createElement('li');
         const tagClass = msg.source === '[WiFi]' ? 'wifi' : 'lora';
-        li.innerHTML = `<span class="${tagClass}">${msg.source}</span> ${msg.nodeId}: ${msg.sender}: ${msg.message}`;
+
+        // Only include the node ID if it differs from the current node
+        if (msg.nodeId !== currentNodeId) {
+          li.innerHTML = `<span class="${tagClass}">${msg.source}</span> Node ${msg.nodeId}: ${msg.sender}: ${msg.message}`;
+        } else {
+          li.innerHTML = `<span class="${tagClass}">${msg.source}</span> ${msg.sender}: ${msg.message}`;
+        }
+
         ul.appendChild(li);
       });
     })
     .catch(error => {
-      console.error('Error fetching messages:', error);
-      setTimeout(() => location.reload(), 5000);
-    });
-
-  fetch('/deviceCount')
-    .then(response => response.json())
-    .then(data => {
-      document.getElementById('deviceCount').textContent =
-        'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + data.nodeId;
-    })
-    .catch(error => {
-      console.error('Error fetching device count:', error);
+      console.error('Error fetching messages or node data:', error);
       setTimeout(() => location.reload(), 5000);
     });
 }
@@ -149,12 +153,43 @@ function loadName() {
     document.getElementById('nameInput').value = savedName;
   }
 }
+
+// Add this function to handle the form submission asynchronously
+function sendMessage(event) {
+  event.preventDefault(); // Prevent the form from submitting normally
+
+  const nameInput = document.getElementById('nameInput');
+  const messageInput = document.querySelector('input[name="msg"]');
+  const sender = nameInput.value;
+  const message = messageInput.value;
+
+  // Send the message using fetch() and prevent full page reload
+  fetch('/update', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: `sender=${encodeURIComponent(sender)}&msg=${encodeURIComponent(message)}`
+  })
+  .then(response => {
+    if (response.ok) {
+      // Clear the message input after successful submission
+      messageInput.value = '';
+      // Fetch the updated messages without reloading the page
+      fetchData();
+    }
+  })
+  .catch(error => {
+    console.error('Error sending message:', error);
+  });
+}
 </script>
 </head>
 <body>
 <h2>Meshify 1.0</h2>
 <div class='warning'>For your safety, do not share your location or any personal information!</div>
-<form action="/update" method="POST" onsubmit="saveName()">
+<!-- Attach the sendMessage function to the form onsubmit event -->
+<form onsubmit="sendMessage(event)">
   <input type="text" id="nameInput" name="sender" placeholder="Enter your name" required maxlength="20" />
   <input type="text" name="msg" placeholder="Enter your message" required maxlength="180" />
   <input type="submit" value="Send" />
@@ -181,6 +216,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 </style>
 <script>
 function fetchNodes() {
+  // Fetch the node data and update the nodes list every 5 seconds
   fetch('/nodesData')
     .then(response => response.json())
     .then(data => {
@@ -190,12 +226,14 @@ function fetchNodes() {
     })
     .catch(error => {
       console.error('Error fetching nodes:', error);
+      setTimeout(() => location.reload(), 5000); // Fallback in case of error
     });
 }
 
+// Run on window load
 window.onload = function() {
   fetchNodes();
-  setInterval(fetchNodes, 5000);
+  setInterval(fetchNodes, 5000); // Fetch nodes data every 5 seconds
 };
 </script>
 </head>
@@ -207,6 +245,7 @@ window.onload = function() {
 </body>
 </html>
 )rawliteral";
+
 
 // Setup Function
 void setup() {
@@ -332,7 +371,7 @@ void setupServerRoutes() {
 
     addMessage(String(getNodeId()), senderName, newMessage, "[WiFi]");
     transmitViaWiFi(fullMessage);
-    request->redirect("/");
+    request->send(200);  // Respond to indicate message was processed
   });
 }
 
