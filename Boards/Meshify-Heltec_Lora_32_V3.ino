@@ -29,6 +29,7 @@
     #define BANDWIDTH 250.0
     #define SPREADING_FACTOR 11
     #define TRANSMIT_POWER 22
+    #define CODING_RATE 5 // Coding rate 4/5 
     String rxdata;
     volatile bool rxFlag = false;
     long counter = 0;
@@ -65,7 +66,7 @@ void calculateDutyCyclePause(uint64_t tx_time) {
       RADIOLIB_OR_HALT(radio.setFrequency(FREQUENCY));
       RADIOLIB_OR_HALT(radio.setBandwidth(BANDWIDTH));
       RADIOLIB_OR_HALT(radio.setSpreadingFactor(SPREADING_FACTOR));
-      RADIOLIB_OR_HALT(radio.setCodingRate(5));           // Coding rate 4/5
+      RADIOLIB_OR_HALT(radio.setCodingRate(CODING_RATE));
       RADIOLIB_OR_HALT(radio.setOutputPower(TRANSMIT_POWER));
 
       // Start receiving
@@ -294,39 +295,43 @@ void setup() {
 
 
 void loop() {
-  esp_task_wdt_reset();
+    esp_task_wdt_reset();
 
-  #ifdef ENABLE_DISPLAY
-  heltec_loop();
-  #endif
+    #ifdef ENABLE_DISPLAY
+    heltec_loop();
+    #endif
 
-  // Check the duty cycle and update the display if necessary
-  isDutyCycleAllowed();
+    // Check the duty cycle and update the display if necessary
+    isDutyCycleAllowed();
 
-  #ifdef ENABLE_LORA
-  if (rxFlag) {
-    rxFlag = false;
-    radio.readData(rxdata);
-    if (_radiolib_status == RADIOLIB_ERR_NONE) {
-      // Handle received message...
+    #ifdef ENABLE_LORA
+    if (rxFlag) {
+        rxFlag = false;
+        radio.readData(rxdata);
+        if (_radiolib_status == RADIOLIB_ERR_NONE) {
+            Serial.printf("Received message via LoRa: %s\n", rxdata.c_str());
+
+            // Add the LoRa message to the message list
+            String sender = "LoRaSender";  // Placeholder for sender ID, modify as needed
+            addMessage(String(getNodeId()), sender, rxdata, "[LoRa]");
+        }
+        radio.startReceive();
     }
-    radio.startReceive();
-  }
-  #endif
+    #endif
 
-  // Handle delayed LoRa transmission
-  if (millis() - lastTransmitTime > random(3000, 5001) && lastTransmitTime != 0) {
-    transmitWithDutyCycle(fullMessage);
-    lastTransmitTime = 0; // Reset timing after LoRa transmission
-  }
+    // Handle delayed LoRa transmission
+    if (millis() - lastTransmitTime > random(3000, 5001) && lastTransmitTime != 0) {
+        transmitWithDutyCycle(fullMessage);
+        lastTransmitTime = 0; // Reset timing after LoRa transmission
+    }
 
-  updateMeshData();
+    updateMeshData();
 
-  #ifdef ENABLE_DISPLAY
-  updateDisplay(); // Refresh the display with current mesh data
-  #endif
+    #ifdef ENABLE_DISPLAY
+    updateDisplay(); // Refresh the display with current mesh data
+    #endif
 
-  dnsServer.processNextRequest();
+    dnsServer.processNextRequest();
 }
 
 // Meshify Initialization Function
