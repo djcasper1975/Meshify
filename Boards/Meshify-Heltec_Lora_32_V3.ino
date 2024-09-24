@@ -118,39 +118,38 @@ const int maxMessageLength = 100; // Set a limit for the message length
 
 // Function to add a message with a size limit
 void addMessage(const String& nodeId, const String& sender, String content, const String& source) {
-  const int maxMessageLength = 100; // Set a limit for the message length
+    const int maxMessageLength = 100; // Set a limit for the message length
 
-  // Truncate the message if it exceeds the maximum allowed length
-  if (content.length() > maxMessageLength) {
-    Serial.println("Message is too long, truncating...");
-    content = content.substring(0, maxMessageLength);
-  }
-
-  // Create the new message
-  Message newMessage = {nodeId, sender, content, source};
-
-  // Check if the message already exists, if so, do not add
-  for (const auto& msg : messages) {
-    if (msg.nodeId == nodeId && msg.sender == sender && msg.content == content) {
-      return; // Message already exists
+    // Truncate the message if it exceeds the maximum allowed length
+    if (content.length() > maxMessageLength) {
+        Serial.println("Message is too long, truncating...");
+        content = content.substring(0, maxMessageLength);
     }
-  }
 
-  // Insert new message at the beginning of the list
-  messages.insert(messages.begin(), newMessage);
+    // Create the new message
+    Message newMessage = {nodeId, sender, content, source};
 
-  // Ensure the list doesn't exceed maxMessages
-  if (messages.size() > maxMessages) {
-    messages.pop_back(); // Remove the oldest message
-  }
+    // Check if the message already exists, if so, do not add
+    for (const auto& msg : messages) {
+        if (msg.nodeId == nodeId && msg.sender == sender && msg.content == content) {
+            return; // Message already exists
+        }
+    }
 
+    // Insert new message at the beginning of the list
+    messages.insert(messages.begin(), newMessage);
 
+    // Ensure the list doesn't exceed maxMessages
+    if (messages.size() > maxMessages) {
+        messages.pop_back(); // Remove the oldest message
+    }
 
-  // Mark the message as not retransmitted yet
-  String fullMessageID = nodeId + ":" + sender + ":" + content;
-  loraRetransmitted[fullMessageID] = false;
-  wifiRetransmitted[fullMessageID] = false;
+    // Mark the message as not retransmitted yet
+    String fullMessageID = nodeId + ":" + sender + ":" + content;
+    loraRetransmitted[fullMessageID] = false;
+    wifiRetransmitted[fullMessageID] = false;
 }
+
 #ifdef ENABLE_DISPLAY
 // Global variable to store last transmission time for TxOK message
 long lastTxTimeMillis = -1;
@@ -214,34 +213,38 @@ bool isDutyCycleAllowed() {
 #ifdef ENABLE_LORA
 // Function to handle LoRa transmissions and update duty cycle
 void transmitWithDutyCycle(const String& message) {
-  String fullMessageID = message;
-  if (loraRetransmitted[fullMessageID]) {
-    Serial.println("Skipping retransmission via LoRa.");
-    return; // Message already retransmitted via LoRa, skip it
-  }
-
-  if (isDutyCycleAllowed()) {
-    tx_time = millis();
-    int status = radio.transmit(message.c_str());
-    tx_time = millis() - tx_time;
-
-    if (status == RADIOLIB_ERR_NONE) {
-      Serial.printf("Message transmitted successfully via LoRa (%i ms)\n", (int)tx_time);
-      loraRetransmitted[fullMessageID] = true; // Mark as retransmitted via LoRa
-
-      // Calculate the required pause to respect the 10% duty cycle
-      calculateDutyCyclePause(tx_time);
-
-      last_tx = millis(); // Record the time of the last transmission
-      #ifdef ENABLE_DISPLAY
-      updateDisplay(tx_time);  // Update display with transmission time
-      #endif
-    } else {
-      Serial.printf("Transmission via LoRa failed (%i)\n", status);
+    String fullMessageID = message;
+    if (loraRetransmitted[fullMessageID]) {
+        Serial.println("Skipping retransmission via LoRa.");
+        return; // Message already retransmitted via LoRa, skip it
     }
-  } else {
-    Serial.printf("Duty cycle limit reached, please wait %i sec.\n", (int)((minimum_pause - (millis() - last_tx)) / 1000) + 1);
-  }
+
+    if (isDutyCycleAllowed()) {
+        tx_time = millis();
+
+        // Include the node ID with the message (e.g., "1234:Hello World")
+        String formattedMessage = String(getNodeId()) + ":" + message;
+
+        int status = radio.transmit(formattedMessage.c_str());
+        tx_time = millis() - tx_time;
+
+        if (status == RADIOLIB_ERR_NONE) {
+            Serial.printf("Message transmitted successfully via LoRa (%i ms)\n", (int)tx_time);
+            loraRetransmitted[fullMessageID] = true; // Mark as retransmitted via LoRa
+            
+            // Calculate the required pause to respect the 10% duty cycle
+            calculateDutyCyclePause(tx_time);
+
+            last_tx = millis(); // Record the time of the last transmission
+            #ifdef ENABLE_DISPLAY
+            updateDisplay(tx_time);  // Update display with transmission time
+            #endif
+        } else {
+            Serial.printf("Transmission via LoRa failed (%i)\n", status);
+        }
+    } else {
+        Serial.printf("Duty cycle limit reached, please wait %i sec.\n", (int)((minimum_pause - (millis() - last_tx)) / 1000) + 1);
+    }
 }
 #endif
 
@@ -304,20 +307,50 @@ void loop() {
     // Check the duty cycle and update the display if necessary
     isDutyCycleAllowed();
 
-    #ifdef ENABLE_LORA
-    if (rxFlag) {
-        rxFlag = false;
-        radio.readData(rxdata);
-        if (_radiolib_status == RADIOLIB_ERR_NONE) {
-            Serial.printf("Received message via LoRa: %s\n", rxdata.c_str());
 
-            // Add the LoRa message to the message list
-            String sender = "LoRaSender";  // Placeholder for sender ID, modify as needed
-            addMessage(String(getNodeId()), sender, rxdata, "[LoRa]");
+
+#ifdef ENABLE_LORA
+if (rxFlag) {
+    rxFlag = false;
+    radio.readData(rxdata);
+    if (_radiolib_status == RADIOLIB_ERR_NONE) {
+        Serial.printf("Received message via LoRa: %s\n", rxdata.c_str());
+
+        // Extract the sender's node ID and message from rxdata
+        int firstColonIndex = rxdata.indexOf(':');
+        if (firstColonIndex > 0) {
+            // Get the sender's node ID and message parts
+            String senderNodeId = rxdata.substring(0, firstColonIndex);
+            String remainingMessage = rxdata.substring(firstColonIndex + 1);
+
+            // Now, extract the sender's name from the remaining message
+            int secondColonIndex = remainingMessage.indexOf(':');
+            if (secondColonIndex > 0) {
+                // Extract the sender's name and the actual message
+                String senderName = remainingMessage.substring(0, secondColonIndex);
+                String messageContent = remainingMessage.substring(secondColonIndex + 1);
+
+                // Avoid processing messages from your own node
+                if (senderNodeId != String(getNodeId())) {
+                    // Add the LoRa message to the message list with [LoRa] as the source
+                    addMessage(senderNodeId, senderName, messageContent, "[LoRa]");
+
+                    Serial.printf("LoRa message added: Sender Node ID: %s, Sender: %s, Message: %s\n", 
+                                  senderNodeId.c_str(), senderName.c_str(), messageContent.c_str());
+                } else {
+                    Serial.println("Received own LoRa message, ignoring...");
+                }
+            } else {
+                Serial.println("Invalid LoRa message format, unable to parse sender and content.");
+            }
+        } else {
+            Serial.println("Invalid LoRa message format, unable to parse.");
         }
-        radio.startReceive();
     }
-    #endif
+    radio.startReceive(); // Start listening for the next LoRa message
+}
+#endif
+
 
     // Handle delayed LoRa transmission
     if (millis() - lastTransmitTime > random(3000, 5001) && lastTransmitTime != 0) {
@@ -350,30 +383,33 @@ void initMesh() {
   mesh.setContainsRoot(false);
 }
 
-// Meshify Received Callback
 void receivedCallback(uint32_t from, String &message) {
-  Serial.printf("Received message from %u: %s\n", from, message.c_str());
+    Serial.printf("Received message from %u: %s\n", from, message.c_str());
 
-  int firstColonIndex = message.indexOf(':');
-  if (firstColonIndex > 0) {
-    String sender = message.substring(0, firstColonIndex);
-    String messageContent = message.substring(firstColonIndex + 1);
+    int firstColonIndex = message.indexOf(':');
+    if (firstColonIndex > 0) {
+        String sender = message.substring(0, firstColonIndex);
+        String messageContent = message.substring(firstColonIndex + 1);
 
-    // Check if message was sent by this node or if it exists in the list
-    for (const auto& msg : messages) {
-      if (msg.sender == sender && msg.content == messageContent) {
-        Serial.println("Ignoring message already in list.");
-        return;
-      }
+        // Avoid processing messages from your own node
+        if (sender != String(getNodeId())) {
+            // Add the WiFi message to the list
+            addMessage(String(from), sender, messageContent, "[WiFi]");
+
+            Serial.printf("WiFi message added: Node ID: %s, Sender: %s, Message: %s\n", 
+                          String(getNodeId()).c_str(), sender.c_str(), messageContent.c_str());
+
+            // Retransmit the message via WiFi first, then LoRa with delay
+            fullMessage = sender + ":" + messageContent;
+            transmitViaWiFi(fullMessage);
+            lastTransmitTime = millis();
+            Serial.printf("Mesh Message [%s] -> Sent via WiFi, pending LoRa\n", message.c_str());
+        } else {
+            Serial.println("Received own WiFi message, ignoring...");
+        }
+    } else {
+        Serial.println("Invalid message format.");
     }
-
-    addMessage(String(from), sender, messageContent, "[WiFi]");
-    // Retransmit the message via WiFi first, then LoRa with delay
-    fullMessage = sender + ":" + messageContent;
-    transmitViaWiFi(fullMessage);
-    lastTransmitTime = millis();
-    Serial.printf("Mesh Message [%s] -> Sent via WiFi, pending LoRa\n", message.c_str());
-  }
 }
 
 // Main HTML Page Content
