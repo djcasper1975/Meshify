@@ -117,7 +117,6 @@ String generateMessageID(const String& nodeId, const String& sender, const Strin
     return nodeId + ":" + sender + ":" + content + ":" + String(millis());  // Appending timestamp to ensure uniqueness
 }
 
-// Function to add a message with a unique ID and size limit
 void addMessage(const String& nodeId, const String& sender, String content, const String& source) {
     const int maxMessageLength = 100;
 
@@ -130,11 +129,9 @@ void addMessage(const String& nodeId, const String& sender, String content, cons
     // Generate the message ID using the new function
     String messageID = generateMessageID(nodeId, sender, content);
 
-    // Check if the message already exists, if so, do not add
-    if (loraRetransmitted[messageID] || wifiRetransmitted[messageID]) {
-        Serial.println("Message already exists, skipping...");
-        return; // Message already exists
-    }
+    // Reset the retransmission flags here to ensure retransmission can happen
+    loraRetransmitted[messageID] = false;
+    wifiRetransmitted[messageID] = false;
 
     // Create the new message
     Message newMessage = {nodeId, sender, content, source};
@@ -156,6 +153,7 @@ void addMessage(const String& nodeId, const String& sender, String content, cons
                   nodeId.c_str(), sender.c_str(), content.c_str(), source.c_str());
 }
 
+
 // Function to check if there are active mesh nodes
 bool areMeshNodesAvailable() {
     return mesh.getNodeList().size() > 0;
@@ -165,29 +163,28 @@ void transmitViaWiFi(const String& message) {
     String fullMessageID = message;
     Serial.printf("[WiFi Tx] Preparing to transmit: %s\n", message.c_str());
 
-    // Check if there are active mesh nodes
+    // Debug: check if the message is marked as retransmitted already
+    Serial.printf("[WiFi Tx Debug] wifiRetransmitted state before retransmission: %s\n", wifiRetransmitted[fullMessageID] ? "true" : "false");
+
     if (!areMeshNodesAvailable()) {
         Serial.println("[WiFi Tx] No mesh nodes available, skipping WiFi transmission.");
-        // If no mesh nodes, set LoRa to transmit immediately
         fullMessage = message;
         loRaTransmitDelay = millis(); // No delay for LoRa if no mesh nodes available
         return;
     }
 
-    if (wifiRetransmitted[fullMessageID]) {
+    if (!wifiRetransmitted[fullMessageID]) {
+        mesh.sendBroadcast(message);
+
+        wifiRetransmitted[fullMessageID] = true;
+        Serial.printf("[WiFi Tx] Message transmitted via WiFi: %s\n", message.c_str());
+
+        loRaTransmitDelay = millis() + random(3000, 5001); 
+        lastTransmitTime = millis();
+    } else {
         Serial.println("[WiFi Tx] Skipping retransmission via WiFi.");
-        return; // Message already retransmitted via WiFi, skip it
     }
-
-    mesh.sendBroadcast(message);
-    wifiRetransmitted[fullMessageID] = true; // Mark as retransmitted via WiFi
-    Serial.printf("[WiFi Tx] Message transmitted via WiFi: %s\n", message.c_str());
-
-    // Set the LoRa transmission delay after WiFi transmission
-    loRaTransmitDelay = millis() + random(3000, 5001);  // Set delay between 3000ms and 5001ms
-    lastTransmitTime = millis(); // Record the time of WiFi transmission
 }
-
 
 // Function to check and enforce duty cycle (for LoRa only)
 bool isDutyCycleAllowed() {
@@ -374,28 +371,32 @@ void receivedCallback(uint32_t from, String &message) {
             return; // Skip the message if it's from yourself
         }
 
-        // Check if message ID already exists
-        if (wifiRetransmitted[fullMessageID]) {
-            Serial.println("Message already retransmitted, ignoring...");
-            return; // Don't retransmit if we've already processed this message
-        }
+        // Reset retransmission flags for the new message
+        wifiRetransmitted[fullMessageID] = false;
+        loraRetransmitted[fullMessageID] = false;
 
         // Add the WiFi message to the list
         addMessage(String(from), sender, messageContent, "[WiFi]");
-        wifiRetransmitted[fullMessageID] = true; // Mark as retransmitted
 
         Serial.printf("WiFi message added: Node ID: %s, Sender: %s, Message: %s\n", 
                       String(getNodeId()).c_str(), sender.c_str(), messageContent.c_str());
 
-        // Retransmit the message via WiFi first, then LoRa with delay
-        fullMessage = sender + ":" + messageContent;  // Only set `fullMessage` when needed
+        // Try retransmitting via WiFi if there are nodes available
+        if (areMeshNodesAvailable()) {
+            Serial.println("[WiFi] Mesh nodes available, retransmitting via WiFi.");
+            transmitViaWiFi(fullMessageID); // Try sending the message via WiFi
+        } else {
+            Serial.println("[WiFi] No mesh nodes available, will transmit via LoRa.");
+        }
 
-        // Set the LoRa transmission delay after WiFi retransmission
+        // Set up for LoRa retransmission with delay
+        fullMessage = sender + ":" + messageContent;  // Only set `fullMessage` when needed
         loRaTransmitDelay = millis() + random(3000, 5001);  // Random delay for LoRa retransmission
     } else {
         Serial.println("Invalid message format.");
     }
 }
+
 
 // Main HTML Page Content
 const char mainPageHtml[] PROGMEM = R"rawliteral(
