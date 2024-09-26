@@ -117,9 +117,8 @@ String generateMessageID(const String& nodeId, const String& sender, const Strin
     return nodeId + ":" + sender + ":" + content + ":" + String(millis());  // Appending timestamp to ensure uniqueness
 }
 
-
-// Function to add a message with a unique ID and size limit (initial source is [    ])
-void addMessage(const String& nodeId, const String& sender, String content) {
+// Function to add a message with a unique ID and size limit
+void addMessage(const String& nodeId, const String& sender, String content, const String& source) {
     const int maxMessageLength = 100;
 
     // Truncate the message if it exceeds the maximum allowed length
@@ -137,8 +136,8 @@ void addMessage(const String& nodeId, const String& sender, String content) {
         return; // Message already exists
     }
 
-    // Create the new message with the source as [    ] initially
-    Message newMessage = {nodeId, sender, content, "[    ]"};
+    // Create the new message
+    Message newMessage = {nodeId, sender, content, source};
 
     // Insert the new message at the beginning of the list
     messages.insert(messages.begin(), newMessage);
@@ -152,11 +151,10 @@ void addMessage(const String& nodeId, const String& sender, String content) {
     loraRetransmitted[messageID] = false;
     wifiRetransmitted[messageID] = false;
 
-    // Log the message (source will be [    ] initially)
-    Serial.printf("Message added: NodeID: %s, Sender: %s, Content: %s, Source: [    ]\n",
-                  nodeId.c_str(), sender.c_str(), content.c_str());
+    // Log the message
+    Serial.printf("Message added: NodeID: %s, Sender: %s, Content: %s, Source: %s\n",
+                  nodeId.c_str(), sender.c_str(), content.c_str(), source.c_str());
 }
-
 
 // Function to check if there are active mesh nodes
 bool areMeshNodesAvailable() {
@@ -167,32 +165,29 @@ void transmitViaWiFi(const String& message) {
     String fullMessageID = message;
     Serial.printf("[WiFi Tx] Preparing to transmit: %s\n", message.c_str());
 
-    // Transmit via WiFi
+    // Check if there are active mesh nodes
+    if (!areMeshNodesAvailable()) {
+        Serial.println("[WiFi Tx] No mesh nodes available, skipping WiFi transmission.");
+        // If no mesh nodes, set LoRa to transmit immediately
+        fullMessage = message;
+        loRaTransmitDelay = millis(); // No delay for LoRa if no mesh nodes available
+        return;
+    }
+
     if (wifiRetransmitted[fullMessageID]) {
         Serial.println("[WiFi Tx] Skipping retransmission via WiFi.");
         return; // Message already retransmitted via WiFi, skip it
     }
 
-    // Send message over WiFi
     mesh.sendBroadcast(message);
     wifiRetransmitted[fullMessageID] = true; // Mark as retransmitted via WiFi
     Serial.printf("[WiFi Tx] Message transmitted via WiFi: %s\n", message.c_str());
 
-    // Ensure we're correctly updating the source to [WiFi] after successful transmission
-    for (auto& msg : messages) {
-        if (msg.content == message.substring(message.indexOf(':') + 1) && msg.source == "[    ]") {
-            msg.source = "[WiFi]";  // Update the source to WiFi
-            Serial.println("Source updated to [WiFi] after successful transmission.");
-            break;
-        }
-    }
-
     // Set the LoRa transmission delay after WiFi transmission
     loRaTransmitDelay = millis() + random(3000, 5001);  // Set delay between 3000ms and 5001ms
-    fullMessage = message;  // Store message for LoRa retransmission
-
-    Serial.printf("LoRa delay set to: %lu, current millis: %lu, fullMessage: %s\n", loRaTransmitDelay, millis(), fullMessage.c_str());
+    lastTransmitTime = millis(); // Record the time of WiFi transmission
 }
+
 
 // Function to check and enforce duty cycle (for LoRa only)
 bool isDutyCycleAllowed() {
@@ -246,6 +241,8 @@ void updateDisplay(long txTimeMillis = -1) {
 }
 #endif
 
+
+// Function to handle LoRa transmissions and apply the delay
 void transmitWithDutyCycle(const String& message) {
     // Check if the LoRa delay has passed
     if (millis() < loRaTransmitDelay) {
@@ -269,15 +266,6 @@ void transmitWithDutyCycle(const String& message) {
         if (status == RADIOLIB_ERR_NONE) {
             Serial.printf("[LoRa Tx] Message transmitted successfully via LoRa (%i ms)\n", (int)tx_time);
             loraRetransmitted[fullMessageID] = true; // Mark as retransmitted via LoRa
-
-            // Ensure we're correctly updating the source to [LoRa] after successful transmission
-            for (auto& msg : messages) {
-                if (msg.content == message.substring(message.indexOf(':') + 1) && msg.source == "[    ]") {
-                    msg.source = "[LoRa]";  // Update the source to LoRa
-                    Serial.println("Source updated to [LoRa] after successful transmission.");
-                    break;
-                }
-            }
 
             // Calculate the required pause to respect the 10% duty cycle
             calculateDutyCyclePause(tx_time);
@@ -330,38 +318,27 @@ void setup() {
 }
 
 void loop() {
-    // Reset the watchdog timer
     esp_task_wdt_reset();
 
     #ifdef ENABLE_DISPLAY
-    // Handle any display updates
     heltec_loop();
     #endif
 
-    // Check if duty cycle allows LoRa transmission
+    // Check the duty cycle and update the display if necessary
     isDutyCycleAllowed();
 
-    // Ensure LoRa transmission happens even after WiFi transmission
+    // Ensure we only transmit when we have a valid message
     if (!fullMessage.isEmpty() && millis() >= loRaTransmitDelay) {
-        // Debugging info to check the conditions before transmitting via LoRa
-        Serial.printf("Checking LoRa transmit: fullMessage: %s, millis: %lu, loRaTransmitDelay: %lu\n", fullMessage.c_str(), millis(), loRaTransmitDelay);
-
-        // Transmit the message via LoRa, using the duty cycle enforcement
-        transmitWithDutyCycle(fullMessage);  
-        
-        // Clear the message after transmission to avoid retransmitting the same message
-        fullMessage = "";  
+        transmitWithDutyCycle(fullMessage);  // Use message without Node ID for LoRa transmission
+        fullMessage = "";  // Clear the fullMessage after transmission to avoid retransmission
     }
 
-    // Update mesh data
     updateMeshData();
 
     #ifdef ENABLE_DISPLAY
-    // Update the display with the current status if enabled
-    updateDisplay(); 
+    updateDisplay(); // Refresh the display with current mesh data
     #endif
 
-    // Process DNS server requests
     dnsServer.processNextRequest();
 }
 
@@ -403,16 +380,15 @@ void receivedCallback(uint32_t from, String &message) {
             return; // Don't retransmit if we've already processed this message
         }
 
-        // Add the WiFi message to the list with the source set to [    ] initially
-        addMessage(String(from), sender, messageContent);  // No source is passed here
-
+        // Add the WiFi message to the list
+        addMessage(String(from), sender, messageContent, "[WiFi]");
         wifiRetransmitted[fullMessageID] = true; // Mark as retransmitted
 
         Serial.printf("WiFi message added: Node ID: %s, Sender: %s, Message: %s\n", 
                       String(getNodeId()).c_str(), sender.c_str(), messageContent.c_str());
 
         // Retransmit the message via WiFi first, then LoRa with delay
-        fullMessage = sender + ":" + messageContent;  // Only set fullMessage when needed
+        fullMessage = sender + ":" + messageContent;  // Only set `fullMessage` when needed
 
         // Set the LoRa transmission delay after WiFi retransmission
         loRaTransmitDelay = millis() + random(3000, 5001);  // Random delay for LoRa retransmission
@@ -493,21 +469,10 @@ function fetchData() {
     .then(data => {
       const ul = document.getElementById('messageList');
       ul.innerHTML = ''; // Clear the current list
-      const myNodeId = localStorage.getItem('nodeId'); // Get your own node ID from local storage
-
       data.messages.forEach(msg => {
         const li = document.createElement('li');
         const tagClass = msg.source === '[LoRa]' ? 'lora' : 'wifi';
-
-        // Check if the message is from your own node
-        if (msg.nodeId === myNodeId) {
-          // Display without the node ID
-          li.innerHTML = `<span class="${tagClass}">${msg.source}</span> ${msg.sender}: ${msg.message}`;
-        } else {
-          // Display with the node ID
-          li.innerHTML = `<span class="${tagClass}">${msg.source}</span> ${msg.nodeId}: ${msg.sender}: ${msg.message}`;
-        }
-        
+        li.innerHTML = `${msg.nodeId}: ${msg.sender}: ${msg.message}`;
         ul.appendChild(li);
       });
     })
@@ -521,7 +486,7 @@ function fetchData() {
       return response.json();
     })
     .then(data => {
-      localStorage.setItem('nodeId', data.nodeId); // Store the node ID in local storage
+      localStorage.setItem('nodeId', data.nodeId);
       document.getElementById('deviceCount').textContent =
         'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + data.nodeId;
     })
@@ -577,25 +542,14 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
   #nodeCount { margin: 20px auto; max-width: 500px; }
 </style>
 <script>
-// Function to fetch and update the node list and node count
 function fetchNodes() {
-  fetch('/nodesData')
-    .then(response => response.json())
-    .then(data => {
-      // Update the list of nodes
-      const ul = document.getElementById('nodeList');
-      ul.innerHTML = data.nodes.map((node, index) => `<li>Node ${index + 1}: ${node}</li>`).join('');
-
-      // Update the node count
-      document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
-    })
-    .catch(error => {
-      console.error('Error fetching nodes:', error);
-      document.getElementById('nodeCount').textContent = 'Error fetching nodes';
-    });
+  fetch('/nodesData').then(response => response.json()).then(data => {
+    const ul = document.getElementById('nodeList');
+    ul.innerHTML = data.nodes.map((node, index) => `<li>Node ${index + 1}: ${node}</li>`).join('');
+    document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
+  })
+  .catch(error => console.error('Error fetching nodes:', error));
 }
-
-// Automatically fetch node data every 5 seconds
 window.onload = function() {
   fetchNodes();
   setInterval(fetchNodes, 5000);
@@ -613,22 +567,20 @@ window.onload = function() {
 
 // Server Routes Setup
 void setupServerRoutes() {
-  // Main page route
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     serveHtml(request, mainPageHtml);
   });
 
-  // Nodes page route
   server.on("/nodes", HTTP_GET, [](AsyncWebServerRequest *request) {
     serveHtml(request, nodesPageHtml);
   });
 
-  // Route for fetching messages
   server.on("/messages", HTTP_GET, [](AsyncWebServerRequest *request) {
     String json = "[";
     bool first = true;
     for (const auto& msg : messages) {
       if (!first) json += ",";
+      // Add nodeId to the JSON object
       json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"message\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\"}";
       first = false;
     }
@@ -636,12 +588,14 @@ void setupServerRoutes() {
     request->send(200, "application/json", "{\"messages\":" + json + "}");
   });
 
-  // Route for fetching node data (for /nodes page)
-  server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest *request) {
-    updateMeshData(); // Ensure mesh data is up-to-date
-    String json = "[";
+  server.on("/deviceCount", HTTP_GET, [](AsyncWebServerRequest *request) {
+    updateMeshData();
+    request->send(200, "application/json", "{\"totalCount\":" + String(getNodeCount()) + ", \"nodeId\":\"" + String(getNodeId()) + "\"}");
+  });
 
-    // Get node list from the mesh and format it as a JSON array
+  server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest *request) {
+    updateMeshData();
+    String json = "[";
     auto nodeList = mesh.getNodeList();
     bool first = true;
     for (auto node : nodeList) {
@@ -653,44 +607,26 @@ void setupServerRoutes() {
     request->send(200, "application/json", "{\"nodes\":" + json + "}");
   });
 
-  // Route for fetching device count
-  server.on("/deviceCount", HTTP_GET, [](AsyncWebServerRequest *request) {
-    updateMeshData(); // Make sure mesh data is up to date
-    request->send(200, "application/json", "{\"totalCount\":" + String(getNodeCount()) + ", \"nodeId\":\"" + String(getNodeId()) + "\"}");
-  });
-
-  // Route to handle message updates
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
     String newMessage = "";
     String senderName = "";
-
-    // Fetch message and sender name from the POST request
     if (request->hasParam("msg", true)) {
-        newMessage = request->getParam("msg", true)->value();
+      newMessage = request->getParam("msg", true)->value();
     }
     if (request->hasParam("sender", true)) {
-        senderName = request->getParam("sender", true)->value();
+      senderName = request->getParam("sender", true)->value();
     }
 
-    // Sanitize HTML-sensitive characters
     newMessage.replace("<", "&lt;");
     newMessage.replace(">", "&gt;");
     senderName.replace("<", "&lt;");
     senderName.replace(">", "&gt;");
 
-    // Prepare the full message for transmission
-    String fullMessage = senderName + ":" + newMessage;
+    fullMessage = senderName + ":" + newMessage;
 
-    // Add the message to the list
-    addMessage(String(getNodeId()), senderName, newMessage);
-
-    // Transmit via WiFi first
+    addMessage(String(getNodeId()), senderName, newMessage, "[WiFi]");
     transmitViaWiFi(fullMessage);
-
-    // Start LoRa transmission after delay
-    lastTransmitTime = millis(); 
-
-    // Redirect the user back to the main page
+    lastTransmitTime = millis(); // Start delay before sending via LoRa
     request->redirect("/");
   });
 }
