@@ -577,14 +577,25 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
   #nodeCount { margin: 20px auto; max-width: 500px; }
 </style>
 <script>
+// Function to fetch and update the node list and node count
 function fetchNodes() {
-  fetch('/nodesData').then(response => response.json()).then(data => {
-    const ul = document.getElementById('nodeList');
-    ul.innerHTML = data.nodes.map((node, index) => <li>Node ${index + 1}: ${node}</li>).join('');
-    document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
-  })
-  .catch(error => console.error('Error fetching nodes:', error));
+  fetch('/nodesData')
+    .then(response => response.json())
+    .then(data => {
+      // Update the list of nodes
+      const ul = document.getElementById('nodeList');
+      ul.innerHTML = data.nodes.map((node, index) => `<li>Node ${index + 1}: ${node}</li>`).join('');
+
+      // Update the node count
+      document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
+    })
+    .catch(error => {
+      console.error('Error fetching nodes:', error);
+      document.getElementById('nodeCount').textContent = 'Error fetching nodes';
+    });
 }
+
+// Automatically fetch node data every 5 seconds
 window.onload = function() {
   fetchNodes();
   setInterval(fetchNodes, 5000);
@@ -602,20 +613,22 @@ window.onload = function() {
 
 // Server Routes Setup
 void setupServerRoutes() {
+  // Main page route
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     serveHtml(request, mainPageHtml);
   });
 
+  // Nodes page route
   server.on("/nodes", HTTP_GET, [](AsyncWebServerRequest *request) {
     serveHtml(request, nodesPageHtml);
   });
 
+  // Route for fetching messages
   server.on("/messages", HTTP_GET, [](AsyncWebServerRequest *request) {
     String json = "[";
     bool first = true;
     for (const auto& msg : messages) {
       if (!first) json += ",";
-      // Add nodeId to the JSON object
       json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"message\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\"}";
       first = false;
     }
@@ -623,14 +636,12 @@ void setupServerRoutes() {
     request->send(200, "application/json", "{\"messages\":" + json + "}");
   });
 
-  server.on("/deviceCount", HTTP_GET, [](AsyncWebServerRequest *request) {
-    updateMeshData();
-    request->send(200, "application/json", "{\"totalCount\":" + String(getNodeCount()) + ", \"nodeId\":\"" + String(getNodeId()) + "\"}");
-  });
-
+  // Route for fetching node data (for /nodes page)
   server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest *request) {
-    updateMeshData();
+    updateMeshData(); // Ensure mesh data is up-to-date
     String json = "[";
+
+    // Get node list from the mesh and format it as a JSON array
     auto nodeList = mesh.getNodeList();
     bool first = true;
     for (auto node : nodeList) {
@@ -642,7 +653,14 @@ void setupServerRoutes() {
     request->send(200, "application/json", "{\"nodes\":" + json + "}");
   });
 
-server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
+  // Route for fetching device count
+  server.on("/deviceCount", HTTP_GET, [](AsyncWebServerRequest *request) {
+    updateMeshData(); // Make sure mesh data is up to date
+    request->send(200, "application/json", "{\"totalCount\":" + String(getNodeCount()) + ", \"nodeId\":\"" + String(getNodeId()) + "\"}");
+  });
+
+  // Route to handle message updates
+  server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
     String newMessage = "";
     String senderName = "";
 
@@ -654,7 +672,7 @@ server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
         senderName = request->getParam("sender", true)->value();
     }
 
-    // Replace HTML-sensitive characters with their encoded equivalents
+    // Sanitize HTML-sensitive characters
     newMessage.replace("<", "&lt;");
     newMessage.replace(">", "&gt;");
     senderName.replace("<", "&lt;");
@@ -663,18 +681,18 @@ server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
     // Prepare the full message for transmission
     String fullMessage = senderName + ":" + newMessage;
 
-    // Add the message with an empty source [    ] initially
-    addMessage(String(getNodeId()), senderName, newMessage);  // No fourth parameter for source
+    // Add the message to the list
+    addMessage(String(getNodeId()), senderName, newMessage);
 
-    // Initiate WiFi transmission
+    // Transmit via WiFi first
     transmitViaWiFi(fullMessage);
 
-    // Start delay before sending via LoRa
+    // Start LoRa transmission after delay
     lastTransmitTime = millis(); 
 
     // Redirect the user back to the main page
     request->redirect("/");
-});
+  });
 }
 
 // HTML Serving Function
