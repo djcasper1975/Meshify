@@ -178,7 +178,7 @@ void transmitViaWiFi(const String& message) {
 
   mesh.sendBroadcast(message);
   status.transmittedViaWiFi = true;  // Mark as retransmitted via WiFi
-  Serial.printf("[WiFi Tx] Message transmitted via WiFi: %s\n", messageID.c_str());
+  Serial.printf("[WiFi Tx] Message transmitted via WiFi: %s\n", message.c_str());
 
   // Set the LoRa transmission delay after WiFi transmission
   loRaTransmitDelay = millis() + random(3000, 5001);  // Set delay between 3000ms and 5001ms
@@ -259,6 +259,8 @@ void transmitWithDutyCycle(const String& message) {
   if (isDutyCycleAllowed()) {
     tx_time = millis();
 
+    Serial.printf("[LoRa Tx] Preparing to transmit: %s\n", message.c_str()); // Added log
+
     heltec_led(50);  // Turn LED on (this will light up during LoRa transmission)
     // Transmit the message
     int transmitStatus = radio.transmit(message.c_str());
@@ -267,6 +269,7 @@ void transmitWithDutyCycle(const String& message) {
 
     if (transmitStatus == RADIOLIB_ERR_NONE) {
       Serial.printf("[LoRa Tx] Message transmitted successfully via LoRa (%i ms)\n", (int)tx_time);
+      Serial.printf("[LoRa Tx] Message transmitted via LoRa: %s\n", message.c_str());
       status.transmittedViaLoRa = true;  // Mark as retransmitted via LoRa
 
       // Calculate the required pause to respect the 10% duty cycle
@@ -320,6 +323,64 @@ void loop() {
 
   isDutyCycleAllowed();
 
+  // Process LoRa reception
+  if (rxFlag) {
+    rxFlag = false;  // Reset flag
+    String message;
+    int state = radio.readData(message);
+    if (state == RADIOLIB_ERR_NONE) {
+      Serial.printf("[LoRa Rx] Received message: %s\n", message.c_str());
+      // Process the received message
+
+      // Extract the message ID, sender, and content from the message
+      int firstSeparator = message.indexOf('|');
+      int secondSeparator = message.indexOf('|', firstSeparator + 1);
+
+      if (firstSeparator == -1 || secondSeparator == -1) {
+        Serial.println("[LoRa Rx] Invalid message format.");
+      } else {
+        String messageID = message.substring(0, firstSeparator);
+        String sender = message.substring(firstSeparator + 1, secondSeparator);
+        String messageContent = message.substring(secondSeparator + 1);
+
+        // **Extract nodeId from messageID**
+        int colonIndex = messageID.indexOf(':');
+        String nodeId = messageID.substring(0, colonIndex);
+
+        // Avoid processing and retransmitting messages from your own node
+        if (sender == String(getNodeId())) {
+          Serial.println("[LoRa Rx] Received own message, ignoring...");
+        } else {
+          auto& status = messageTransmissions[messageID];
+          // Check if the message has already been retransmitted over WiFi or LoRa
+          if (status.transmittedViaWiFi && status.transmittedViaLoRa) {
+            Serial.println("[LoRa Rx] Message already retransmitted via both WiFi and LoRa, ignoring...");
+          } else {
+            // Add the message to the message list (tracking both WiFi and LoRa)
+            Serial.printf("[LoRa Rx] Adding message: %s\n", message.c_str()); // Added log
+            addMessage(nodeId, messageID, sender, messageContent, "[LoRa]");  // **Use the extracted nodeId**
+
+            // Always retransmit over WiFi first, if it hasn't already
+            if (!status.transmittedViaWiFi) {
+              Serial.println("[WiFi Retransmission] Retransmitting message over WiFi.");
+              transmitViaWiFi(message);
+            }
+
+            // Schedule a delayed LoRa transmission after the WiFi transmission
+            if (!status.transmittedViaLoRa) {
+              fullMessage = message;  // Store the message for LoRa retransmission
+              loRaTransmitDelay = millis() + random(3000, 5001);  // Random delay for LoRa retransmission
+            }
+          }
+        }
+      }
+    } else {
+      Serial.printf("[LoRa Rx] Receive failed, code %d\n", state);
+    }
+    // Restart receiving
+    radio.startReceive();
+  }
+
   if (!fullMessage.isEmpty() && millis() >= loRaTransmitDelay) {
     transmitWithDutyCycle(fullMessage);  // Use message with message ID for LoRa transmission
     fullMessage = "";                    // Clear the fullMessage after transmission to avoid retransmission
@@ -340,23 +401,21 @@ void initMesh() {
 
   mesh.onChangedConnections([]() {
     updateMeshData();
-    #ifdef ENABLE_DISPLAY
     updateDisplay();
-    #endif
   });
 
   mesh.setContainsRoot(false);
 }
 
 void receivedCallback(uint32_t from, String& message) {
-  Serial.printf("Received message from %u: %s\n", from, message.c_str());
+  Serial.printf("[WiFi Rx] Received message from %u: %s\n", from, message.c_str());
 
   // Extract the message ID, sender, and content from the message
   int firstSeparator = message.indexOf('|');
   int secondSeparator = message.indexOf('|', firstSeparator + 1);
 
   if (firstSeparator == -1 || secondSeparator == -1) {
-    Serial.println("Invalid message format.");
+    Serial.println("[WiFi Rx] Invalid message format.");
     return;
   }
 
@@ -364,21 +423,26 @@ void receivedCallback(uint32_t from, String& message) {
   String sender = message.substring(firstSeparator + 1, secondSeparator);
   String messageContent = message.substring(secondSeparator + 1);
 
+  // **Extract nodeId from messageID**
+  int colonIndex = messageID.indexOf(':');
+  String nodeId = messageID.substring(0, colonIndex);
+
   // Avoid processing and retransmitting messages from your own node
   if (sender == String(getNodeId())) {
-    Serial.println("Received own message, ignoring...");
+    Serial.println("[WiFi Rx] Received own message, ignoring...");
     return;  // Skip the message if it's from yourself
   }
 
   auto& status = messageTransmissions[messageID];
   // Check if the message has already been retransmitted over WiFi or LoRa
   if (status.transmittedViaWiFi && status.transmittedViaLoRa) {
-    Serial.println("Message already retransmitted via both WiFi and LoRa, ignoring...");
+    Serial.println("[WiFi Rx] Message already retransmitted via both WiFi and LoRa, ignoring...");
     return;  // Don't retransmit if it's already been retransmitted on both networks
   }
 
   // Add the message to the message list (tracking both WiFi and LoRa)
-  addMessage(String(from), messageID, sender, messageContent, "[WiFi]");  // Add as a WiFi message
+  Serial.printf("[WiFi Rx] Adding message: %s\n", message.c_str()); // Added log
+  addMessage(nodeId, messageID, sender, messageContent, "[WiFi]");  // **Use the extracted nodeId**
 
   // Always retransmit over WiFi first, if it hasn't already
   if (!status.transmittedViaWiFi) {
@@ -633,6 +697,7 @@ void setupServerRoutes() {
     fullMessage = constructMessage(messageID, senderName, newMessage);
 
     addMessage(String(getNodeId()), messageID, senderName, newMessage, "[WiFi]");
+    Serial.printf("[WiFi Tx] Adding message: %s\n", fullMessage.c_str()); // Added log
     transmitViaWiFi(fullMessage);
     lastTransmitTime = millis();  // Start delay before sending via LoRa
     request->redirect("/");
