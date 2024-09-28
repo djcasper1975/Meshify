@@ -46,9 +46,12 @@ void rx() {
 
 // Function to calculate the required pause based on the duty cycle
 void calculateDutyCyclePause(uint64_t tx_time) {
-  // tx_time is the transmission time in milliseconds
-  // Calculate the minimum pause time to ensure compliance with the 10% duty cycle
-  minimum_pause = (tx_time * (10 / DUTY_CYCLE_LIMIT_PERCENT)) - tx_time;
+  // Corrected the duty cycle calculation to ensure proper pause time
+  // For a 10% duty cycle over 100 seconds:
+  // Max transmit time = 10 seconds, hence pause = 90 seconds
+  // Formula: minimum_pause = DUTY_CYCLE_WINDOW * (DUTY_CYCLE_LIMIT_PERCENT / 100.0) - tx_time
+  minimum_pause = DUTY_CYCLE_WINDOW * (DUTY_CYCLE_LIMIT_PERCENT / 100.0) - tx_time;
+  if (minimum_pause < 0) minimum_pause = 0; // Ensure non-negative pause
 }
 
 void setupLora() {
@@ -158,6 +161,17 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
                 nodeId.c_str(), sender.c_str(), content.c_str(), finalSource.c_str(), messageID.c_str());
 }
 
+// **New Function: Schedule LoRa Transmission**
+// This function schedules LoRa transmission by setting the message and the delay
+void scheduleLoRaTransmission(const String& message) {
+  fullMessage = message;
+  loRaTransmitDelay = millis() + random(3000, 5001); // Set delay between 3000ms and 5000ms
+  Serial.printf("[LoRa Schedule] Message scheduled for LoRa transmission after %lu ms: %s\n", 
+                loRaTransmitDelay - millis(), message.c_str());
+}
+
+// **Modified Function: Transmit via WiFi**
+// Now, this function only handles WiFi transmission without scheduling LoRa
 void transmitViaWiFi(const String& message) {
   Serial.printf("[WiFi Tx] Preparing to transmit: %s\n", message.c_str());
 
@@ -179,10 +193,6 @@ void transmitViaWiFi(const String& message) {
   mesh.sendBroadcast(message);
   status.transmittedViaWiFi = true;  // Mark as retransmitted via WiFi
   Serial.printf("[WiFi Tx] Message transmitted via WiFi: %s\n", message.c_str());
-
-  // Set the LoRa transmission delay after WiFi transmission
-  loRaTransmitDelay = millis() + random(3000, 5001);  // Set delay between 3000ms and 5001ms
-  lastTransmitTime = millis();                        // Record the time of WiFi transmission
 }
 
 // Function to check and enforce duty cycle (for LoRa only)
@@ -235,6 +245,8 @@ void updateDisplay(long txTimeMillis = -1) {
   display.display();
 }
 
+// **Modified Function: Transmit with Duty Cycle**
+// Now, after a successful LoRa transmission, it will trigger WiFi retransmission
 void transmitWithDutyCycle(const String& message) {
   // Check if the LoRa delay has passed
   if (millis() < loRaTransmitDelay) {
@@ -277,6 +289,9 @@ void transmitWithDutyCycle(const String& message) {
       last_tx = millis();  // Record the time of the last transmission
 
       updateDisplay(tx_time);  // Update display with transmission time
+
+      // **Trigger WiFi retransmission after successful LoRa transmission**
+      transmitViaWiFi(message);
 
     } else {
       Serial.printf("[LoRa Tx] Transmission via LoRa failed (%i)\n", transmitStatus);
@@ -321,7 +336,7 @@ void loop() {
 
   heltec_loop();
 
-  isDutyCycleAllowed();
+  // No need to call isDutyCycleAllowed() here separately
 
   // Process LoRa reception
   if (rxFlag) {
@@ -360,17 +375,13 @@ void loop() {
             Serial.printf("[LoRa Rx] Adding message: %s\n", message.c_str()); // Added log
             addMessage(nodeId, messageID, sender, messageContent, "[LoRa]");  // **Use the extracted nodeId**
 
-            // Always retransmit over WiFi first, if it hasn't already
-            if (!status.transmittedViaWiFi) {
-              Serial.println("[WiFi Retransmission] Retransmitting message over WiFi.");
-              transmitViaWiFi(message);
+            // **Schedule LoRa transmission first**
+            if (!status.transmittedViaLoRa) {
+              scheduleLoRaTransmission(message);  // Schedule LoRa retransmission
             }
 
-            // Schedule a delayed LoRa transmission after the WiFi transmission
-            if (!status.transmittedViaLoRa) {
-              fullMessage = message;  // Store the message for LoRa retransmission
-              loRaTransmitDelay = millis() + random(3000, 5001);  // Random delay for LoRa retransmission
-            }
+            // **WiFi transmission will be handled after LoRa transmission**
+            // No immediate action needed here
           }
         }
       }
@@ -381,6 +392,7 @@ void loop() {
     radio.startReceive();
   }
 
+  // **Handle Scheduled LoRa Transmission**
   if (!fullMessage.isEmpty() && millis() >= loRaTransmitDelay) {
     transmitWithDutyCycle(fullMessage);  // Use message with message ID for LoRa transmission
     fullMessage = "";                    // Clear the fullMessage after transmission to avoid retransmission
@@ -444,17 +456,13 @@ void receivedCallback(uint32_t from, String& message) {
   Serial.printf("[WiFi Rx] Adding message: %s\n", message.c_str()); // Added log
   addMessage(nodeId, messageID, sender, messageContent, "[WiFi]");  // **Use the extracted nodeId**
 
-  // Always retransmit over WiFi first, if it hasn't already
-  if (!status.transmittedViaWiFi) {
-    Serial.println("[WiFi Retransmission] Retransmitting message over WiFi.");
-    transmitViaWiFi(message);
+  // **Schedule LoRa transmission first**
+  if (!status.transmittedViaLoRa) {
+    scheduleLoRaTransmission(message);  // Schedule LoRa retransmission
   }
 
-  // Schedule a delayed LoRa transmission after the WiFi transmission
-  if (!status.transmittedViaLoRa) {
-    fullMessage = message;                               // Store the message for LoRa retransmission
-    loRaTransmitDelay = millis() + random(3000, 5001);   // Random delay for LoRa retransmission
-  }
+  // **WiFi transmission will be handled after LoRa transmission**
+  // No immediate action needed here
 }
 
 // Main HTML Page Content
@@ -694,12 +702,15 @@ void setupServerRoutes() {
     String messageID = generateMessageID(String(getNodeId()));
 
     // Construct the full message with the message ID
-    fullMessage = constructMessage(messageID, senderName, newMessage);
+    String constructedMessage = constructMessage(messageID, senderName, newMessage);
 
-    addMessage(String(getNodeId()), messageID, senderName, newMessage, "[WiFi]");
-    Serial.printf("[WiFi Tx] Adding message: %s\n", fullMessage.c_str()); // Added log
-    transmitViaWiFi(fullMessage);
-    lastTransmitTime = millis();  // Start delay before sending via LoRa
+    // Add the message with source "[LoRa]" since LoRa will transmit first
+    addMessage(String(getNodeId()), messageID, senderName, newMessage, "[LoRa]");
+    Serial.printf("[LoRa Tx] Adding message: %s\n", constructedMessage.c_str()); // Added log
+
+    // **Schedule LoRa transmission first**
+    scheduleLoRaTransmission(constructedMessage);
+
     request->redirect("/");
   });
 }
