@@ -3,9 +3,9 @@
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
 #include <Wire.h>
-#include <esp_task_wdt.h> // Watchdog timer library
-#include <vector> // For handling list of message IDs
-#include <map> // For tracking retransmissions
+#include <esp_task_wdt.h>
+#include <vector>
+#include <map>
 
 // Meshify Parameters
 #define MESH_SSID "Meshify 1.0"
@@ -20,63 +20,156 @@ painlessMesh mesh;
 
 // Message structure for Meshify
 struct Message {
-  String nodeId; // Node ID of the message sender
+  String nodeId;    // Node ID of the message sender
   String sender;
   String content;
-  String source; // Indicates message source (WiFi or LoRa)
+  String source;    // Indicates message source (WiFi or LoRa)
+  String messageID; // Unique message ID
 };
 
 // Rolling list for messages
-std::vector<Message> messages; // Dynamic vector to store messages
+std::vector<Message> messages;
 
 // Track retransmissions
-std::map<String, bool> wifiRetransmitted; // Tracks if a message has been retransmitted via WiFi
+struct TransmissionStatus {
+  bool transmittedViaWiFi = false;
+  bool transmittedViaLoRa = false;
+  bool addedToMessages = false;
+};
+std::map<String, TransmissionStatus> messageTransmissions;
 
 // Centralized mesh data
 int totalNodeCount = 0;
 uint32_t currentNodeId = 0;
 
+// Global message counter for generating unique message IDs (in-memory)
+unsigned long messageCounter = 0;
+
 // Function to generate a unique message ID
 String generateMessageID() {
-  return String(millis()); // Use current time as a unique message ID
+  messageCounter++; // Increment the counter
+  return String(getNodeId()) + ":" + String(messageCounter); // Format: nodeId:counter
 }
 
-// Function to add a message to the list and ensure new messages are at the top
-void addMessage(const String& nodeId, const String& sender, const String& content, const String& source) {
-  // Create the new message
-  Message newMessage = {nodeId, sender, content, source};
+// Function to construct a message with the message ID included
+String constructMessage(const String& messageID, const String& sender, const String& content) {
+  return messageID + "|" + sender + "|" + content; // New format
+}
 
-  // Check if the message already exists, if so, do not add
-  for (const auto& msg : messages) {
-    if (msg.nodeId == nodeId && msg.sender == sender && msg.content == content) {
-      return; // Message already exists
-    }
+// Function to add a message with a unique ID and size limit
+void addMessage(const String& nodeId, const String& messageID, const String& sender, String content, const String& source) {
+  const int maxMessageLength = 100;
+
+  // Truncate the message if it exceeds the maximum allowed length
+  if (content.length() > maxMessageLength) {
+    Serial.println("Message is too long, truncating...");
+    content = content.substring(0, maxMessageLength);
   }
 
-  // Insert new message at the beginning of the list
+  // Retrieve the transmission status for this messageID
+  auto& status = messageTransmissions[messageID];
+  
+  // Check if the message has already been added to the messages vector
+  if (status.addedToMessages) {
+    Serial.println("Message already exists in view, skipping addition...");
+    return; // Message has already been added, skip
+  }
+
+  // If the message is from our own node, do not include the source tag
+  String finalSource = "";
+  if (nodeId != String(getNodeId())) {
+    finalSource = source; // Only show source if it's from another node
+  }
+
+  // Create the new message
+  Message newMessage = {nodeId, sender, content, finalSource, messageID};
+
+  // Insert the new message at the beginning of the list
   messages.insert(messages.begin(), newMessage);
+
+  // Mark the message as added to prevent future duplicates
+  status.addedToMessages = true;
 
   // Ensure the list doesn't exceed maxMessages
   if (messages.size() > maxMessages) {
     messages.pop_back(); // Remove the oldest message
   }
 
-  // Mark the message as not retransmitted yet
-  String fullMessageID = nodeId + ":" + sender + ":" + content;
-  wifiRetransmitted[fullMessageID] = false;
+  // Log the message
+  Serial.printf("Message added: NodeID: %s, Sender: %s, Content: %s, Source: %s, MessageID: %s\n",
+                nodeId.c_str(), sender.c_str(), content.c_str(), finalSource.c_str(), messageID.c_str());
 }
 
 // Function to send message via WiFi (Meshify)
 void transmitViaWiFi(const String& message) {
-  String fullMessageID = message;
-  if (wifiRetransmitted[fullMessageID]) {
-    Serial.println("Skipping retransmission via WiFi.");
-    return; // Message already retransmitted via WiFi, skip it
+  // Extract the message ID from the message
+  int separatorIndex = message.indexOf('|');
+  if (separatorIndex == -1) {
+    Serial.println("[WiFi Tx] Invalid message format.");
+    return;
+  }
+  String messageID = message.substring(0, separatorIndex);
+
+  auto& status = messageTransmissions[messageID];
+  // Only retransmit if it hasn't been retransmitted via WiFi already
+  if (status.transmittedViaWiFi) {
+    Serial.println("[WiFi Tx] Skipping retransmission via WiFi.");
+    return;
   }
 
   mesh.sendBroadcast(message);
-  wifiRetransmitted[fullMessageID] = true; // Mark as retransmitted via WiFi
-  Serial.printf("Message transmitted via WiFi: %s\n", message.c_str());
+  status.transmittedViaWiFi = true; // Mark as retransmitted via WiFi
+  Serial.printf("[WiFi Tx] Message transmitted via WiFi: %s\n", message.c_str());
+}
+
+// Function to handle incoming messages
+void receivedCallback(uint32_t from, String &message) {
+  Serial.printf("Received message from %u: %s\n", from, message.c_str());
+
+  // Parse the message based on the new format: messageID|sender|content
+  int firstSeparator = message.indexOf('|');
+  int secondSeparator = message.indexOf('|', firstSeparator + 1);
+
+  if (firstSeparator == -1 || secondSeparator == -1) {
+    Serial.println("[WiFi Rx] Invalid message format.");
+    return;
+  }
+
+  String messageID = message.substring(0, firstSeparator);
+  String sender = message.substring(firstSeparator + 1, secondSeparator);
+  String messageContent = message.substring(secondSeparator + 1);
+
+  // Validate messageID format
+  int colonIndex = messageID.indexOf(':');
+  if (colonIndex == -1) {
+    Serial.println("[WiFi Rx] Invalid messageID format.");
+    return;
+  }
+  String nodeId = messageID.substring(0, colonIndex);
+  String counterStr = messageID.substring(colonIndex + 1);
+  bool validCounter = true;
+  for (unsigned int i = 0; i < counterStr.length(); i++) {
+    if (!isDigit(counterStr[i])) {
+      validCounter = false;
+      break;
+    }
+  }
+  if (!validCounter || nodeId.length() == 0) {
+    Serial.println("[WiFi Rx] Invalid messageID content.");
+    return;
+  }
+
+  // Avoid processing and retransmitting messages from your own node
+  if (sender == String(getNodeId())) {
+    Serial.println("[WiFi Rx] Received own message, ignoring...");
+    return; // Skip the message if it's from yourself
+  }
+
+  // Add the message to the message list
+  addMessage(nodeId, messageID, sender, messageContent, "[WiFi]");
+
+  // Retransmit the message via WiFi if not already done
+  transmitViaWiFi(message);
 }
 
 // Main HTML Page Content
@@ -98,6 +191,36 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
   .wifi { color: blue; }
 </style>
 <script>
+// Function to send a message without refreshing the page
+function sendMessage(event) {
+  event.preventDefault(); // Prevent form submission from reloading the page
+
+  const nameInput = document.getElementById('nameInput');
+  const messageInput = document.querySelector('input[name="msg"]');
+  const sender = nameInput.value;
+  const message = messageInput.value;
+
+  // Send the message using fetch() and prevent full page reload
+  fetch('/update', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: `sender=${encodeURIComponent(sender)}&msg=${encodeURIComponent(message)}`
+  })
+  .then(response => {
+    if (response.ok) {
+      // Clear the message input after successful submission
+      messageInput.value = '';
+      // Fetch the updated messages without reloading the page
+      fetchData();
+    }
+  })
+  .catch(error => {
+    console.error('Error sending message:', error);
+  });
+}
+
 function fetchData() {
   let currentNodeId = null;
 
@@ -153,36 +276,6 @@ function loadName() {
     document.getElementById('nameInput').value = savedName;
   }
 }
-
-// Add this function to handle the form submission asynchronously
-function sendMessage(event) {
-  event.preventDefault(); // Prevent the form from submitting normally
-
-  const nameInput = document.getElementById('nameInput');
-  const messageInput = document.querySelector('input[name="msg"]');
-  const sender = nameInput.value;
-  const message = messageInput.value;
-
-  // Send the message using fetch() and prevent full page reload
-  fetch('/update', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: `sender=${encodeURIComponent(sender)}&msg=${encodeURIComponent(message)}`
-  })
-  .then(response => {
-    if (response.ok) {
-      // Clear the message input after successful submission
-      messageInput.value = '';
-      // Fetch the updated messages without reloading the page
-      fetchData();
-    }
-  })
-  .catch(error => {
-    console.error('Error sending message:', error);
-  });
-}
 </script>
 </head>
 <body>
@@ -200,7 +293,7 @@ function sendMessage(event) {
 <p>github.com/djcasper1975</p>
 </body>
 </html>
-)rawliteral";
+)rawliteral"; // Ensure this is properly closed
 
 // Nodes List HTML Page Content
 const char nodesPageHtml[] PROGMEM = R"rawliteral(
@@ -244,8 +337,7 @@ window.onload = function() {
 <a href="/">Back to Main Page</a>
 </body>
 </html>
-)rawliteral";
-
+)rawliteral"; // Ensure this is properly closed
 
 // Setup Function
 void setup() {
@@ -276,38 +368,13 @@ void loop() {
 void initMesh() {
   mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
   mesh.init(MESH_SSID, MESH_PASSWORD, MESH_PORT);
-  mesh.onReceive(receivedCallback);
+  mesh.onReceive(receivedCallback); // Ensure only one definition
 
   mesh.onChangedConnections([]() {
     updateMeshData();
   });
 
   mesh.setContainsRoot(false);
-}
-
-// Meshify Received Callback
-void receivedCallback(uint32_t from, String &message) {
-  Serial.printf("Received message from %u: %s\n", from, message.c_str());
-
-  int firstColonIndex = message.indexOf(':');
-  if (firstColonIndex > 0) {
-    String sender = message.substring(0, firstColonIndex);
-    String messageContent = message.substring(firstColonIndex + 1);
-
-    // Check if message was sent by this node or if it exists in the list
-    for (const auto& msg : messages) {
-      if (msg.sender == sender && msg.content == messageContent) {
-        Serial.println("Ignoring message already in list.");
-        return;
-      }
-    }
-
-    addMessage(String(from), sender, messageContent, "[WiFi]");
-    // Retransmit the message via WiFi
-    String fullMessage = sender + ":" + messageContent;
-    transmitViaWiFi(fullMessage);
-    Serial.printf("Mesh Message [%s] -> Sent via WiFi\n", message.c_str());
-  }
 }
 
 // Server Routes Setup
@@ -325,8 +392,8 @@ void setupServerRoutes() {
     bool first = true;
     for (const auto& msg : messages) {
       if (!first) json += ",";
-      // Add nodeId to the JSON object
-      json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"message\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\"}";
+      // Include all necessary fields in the JSON object
+      json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"message\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\",\"messageID\":\"" + msg.messageID + "\"}";
       first = false;
     }
     json += "]";
@@ -362,16 +429,23 @@ void setupServerRoutes() {
       senderName = request->getParam("sender", true)->value();
     }
 
+    // Sanitize inputs to prevent HTML injection
     newMessage.replace("<", "&lt;");
     newMessage.replace(">", "&gt;");
     senderName.replace("<", "&lt;");
     senderName.replace(">", "&gt;");
 
-    String fullMessage = senderName + ":" + newMessage;
+    // Generate a new message ID without passing parameters
+    String messageID = generateMessageID();
 
-    addMessage(String(getNodeId()), senderName, newMessage, "[WiFi]");
-    transmitViaWiFi(fullMessage);
-    request->send(200);  // Respond to indicate message was processed
+    // Construct the full message with the message ID
+    String constructedMessage = constructMessage(messageID, senderName, newMessage);
+
+    // Add the message with source "[WiFi]" since WiFi is being used
+    addMessage(String(getNodeId()), messageID, senderName, newMessage, "[WiFi]");
+    transmitViaWiFi(constructedMessage); // Transmit via WiFi
+
+    request->send(200); // Respond to indicate message was processed
   });
 }
 
