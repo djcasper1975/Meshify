@@ -475,178 +475,371 @@ void receivedCallback(uint32_t from, String& message) {
   // No immediate action needed here
 }
 
-// Main HTML Page Content
 const char mainPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-  body { font-family: Arial, sans-serif; margin: 0; padding: 0; text-align: center; }
-  h1, h2 { color: #333; }
-  form { margin: 20px auto; max-width: 500px; }
-  input[type=text], input[type=submit] { width: calc(100% - 22px); padding: 10px; margin: 10px 0; box-sizing: border-box; }
-  input[type=submit] { background-color: #007BFF; color: white; border: none; border-radius: 5px; cursor: pointer; }
-  input[type=submit]:hover { background-color: #0056b3; }
-  ul { list-style-type: none; padding: 0; margin: 20px auto; max-width: 500px; }
-  li { background-color: #f9f9f9; margin: 5px 0; padding: 10px; border-radius: 5px; word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; }
-  #deviceCount { margin: 20px auto; max-width: 500px; }
-  .warning { color: red; margin-bottom: 20px; }
-  .wifi { color: blue; }
-  .lora { color: orange; }
-</style>
-<script>
-// Function to send a message without refreshing the page
-function sendMessage(event) {
-  event.preventDefault(); // Prevent form submission from reloading the page
-
-  const nameInput = document.getElementById('nameInput');
-  const messageInput = document.getElementById('messageInput');
-  
-  const sender = nameInput.value;
-  const msg = messageInput.value;
-
-  // Ensure both fields are filled
-  if (!sender || !msg) {
-    alert('Please enter both a name and a message.');
-    return;
-  }
-
-  // Save the name locally so it's preserved
-  localStorage.setItem('username', sender);
-
-  // Create the form data
-  const formData = new URLSearchParams();
-  formData.append('sender', sender);
-  formData.append('msg', msg);
-
-  // Send the form data using fetch (AJAX)
-  fetch('/update', {
-    method: 'POST',
-    body: formData
-  }).then(response => {
-    if (!response.ok) {
-      throw new Error('Failed to send message');
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meshify Chat Room</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f7f6;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      height: 100vh;
+      overflow: hidden;
     }
-    // Clear the message input after successful submission
-    messageInput.value = '';
-    // Update the message list by calling fetchData
-    fetchData();
-  }).catch(error => {
-    console.error('Error sending message:', error);
-  });
-}
+    .warning {
+      color: red;
+      font-weight: normal;
+      font-size: 0.9em;
+      padding: 10px;
+      background-color: #fff3f3;
+      border: 1px solid red;
+      max-width: 100%;
+      text-align: center;
+      border-radius: 5px;
+      margin: 0;
+    }
+    h2 {
+      color: #333;
+      margin: 10px 0 5px;
+      font-size: 1.2em;
+    }
+    #chat-container {
+      background-color: #fff;
+      width: 100%;
+      max-width: 600px;
+      height: calc(100vh - 250px);
+      margin-top: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      overflow-y: auto;
+      padding: 10px;
+      border-radius: 10px;
+      box-sizing: border-box;
+    }
+    #messageForm {
+      width: 100%;
+      max-width: 600px;
+      display: flex;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      background-color: #fff;
+      padding: 10px;
+      box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+      box-sizing: border-box;
+    }
+    #nameInput, #messageInput {
+      width: 40%;
+      padding: 10px;
+      margin-right: 5px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      box-sizing: border-box;
+    }
+    #messageInput {
+      width: 60%;
+    }
+    #messageForm input[type=submit] {
+      background-color: #007bff;
+      color: white;
+      border: none;
+      padding: 10px;
+      cursor: pointer;
+      border-radius: 5px;
+    }
+    #messageList {
+      list-style-type: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .message {
+      display: flex;
+      flex-direction: column;
+      margin: 5px 0;
+      padding: 8px;
+      border-radius: 5px;
+      width: 80%;
+      box-sizing: border-box;
+      border: 2px solid;
+      word-wrap: break-word;
+    }
+    .message.sent {
+      align-self: flex-start;
+      border-color: green;
+      background-color: #eaffea;
+    }
+    .message.received.wifi {
+      align-self: flex-end;
+      border-color: blue;
+      background-color: #e7f0ff;
+    }
+    .message.received.lora {
+      align-self: flex-end;
+      border-color: orange;
+      background-color: #fff4e0;
+    }
+    .message-nodeid {
+      font-size: 0.7em; /* Make the Node ID smaller */
+      color: #666;
+    }
+    .message-content {
+      font-size: 0.85em; /* Message content remains larger than Node ID */
+      color: #333;
+    }
+    .message-time {
+      font-size: 0.7em; /* Smaller font size for the time */
+      color: #999;
+      text-align: right;
+      margin-top: 5px;
+    }
+    #deviceCount {
+      margin: 5px 0;
+      font-weight: normal;
+      font-size: 0.9em;
+    }
+    #deviceCount a {
+      color: #007bff;
+      text-decoration: none;
+    }
+    #deviceCount a:hover {
+      text-decoration: underline;
+    }
+  </style>
+  <script>
+    const messageTimestamps = {};  // Object to store timestamps for each message
 
-function fetchData() {
-  fetch('/messages')
-    .then(response => {
-      if (!response.ok) throw new Error('Failed to fetch messages');
-      return response.json();
-    })
-    .then(data => {
-      const ul = document.getElementById('messageList');
-      ul.innerHTML = ''; // Clear the current list
-      const currentNodeId = localStorage.getItem('nodeId');  // Get current node ID
+    function formatTimestamp(timestamp) {
+      const date = new Date(timestamp);
+      return date.toLocaleTimeString();  // Adjust the format as needed
+    }
 
-      data.messages.forEach(msg => {
-        const li = document.createElement('li');
-        
-        // Check if the message came from our own node
-        if (msg.nodeId === currentNodeId) {
-          li.innerHTML = `${msg.sender}: ${msg.message}`;  // Only show the message and sender
-        } else {
-          // Show node ID and source tag if it's from another node
-          const tagClass = msg.source === '[LoRa]' ? 'lora' : 'wifi';
-          li.innerHTML = `<span class="${tagClass}">${msg.source}</span> ${msg.nodeId}: ${msg.sender}: ${msg.message}`;
-        }
-        ul.appendChild(li);
-      });
-    })
-    .catch(error => {
-      console.error('Error fetching messages:', error);
-    });
+    function sendMessage(event) {
+      event.preventDefault();
 
-  fetch('/deviceCount')
-    .then(response => {
-      if (!response.ok) throw new Error('Failed to fetch device count');
-      return response.json();
-    })
-    .then(data => {
-      localStorage.setItem('nodeId', data.nodeId);
-      document.getElementById('deviceCount').textContent =
-        'Mesh Nodes: ' + data.totalCount + ', Node ID: ' + data.nodeId;
-    })
-    .catch(error => {
-      console.error('Error fetching device count:', error);
-    });
-}
+      const nameInput = document.getElementById('nameInput');
+      const messageInput = document.getElementById('messageInput');
+      
+      const sender = nameInput.value;
+      const msg = messageInput.value;
 
-// On window load, set up the event listeners and start fetching data
-window.onload = function() {
-  // Load the saved name from local storage, if available
-  const savedName = localStorage.getItem('username');
-  if (savedName) {
-    document.getElementById('nameInput').value = savedName;
-  }
+      if (!sender || !msg) {
+        alert('Please enter both a name and a message.');
+        return;
+      }
 
-  // Fetch messages every 5 seconds
-  fetchData();
-  setInterval(fetchData, 5000); // Fetch data every 5 seconds
+      localStorage.setItem('username', sender);
 
-  // Attach the sendMessage function to the form's submit event
-  document.getElementById('messageForm').addEventListener('submit', sendMessage);
-};
-</script>
+      const formData = new URLSearchParams();
+      formData.append('sender', sender);
+      formData.append('msg', msg);
+
+      fetch('/update', {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => {
+        if (!response.ok) throw new Error('Failed to send message');
+        messageInput.value = '';
+        fetchData();  // Fetch new messages
+      })
+      .catch(error => console.error('Error sending message:', error));
+    }
+
+    function fetchData() {
+      fetch('/messages')
+        .then(response => response.json())
+        .then(data => {
+          const ul = document.getElementById('messageList');
+          ul.innerHTML = '';
+
+          const currentNodeId = localStorage.getItem('nodeId');
+
+          data.messages.forEach(msg => {
+            const li = document.createElement('li');
+            li.classList.add('message');
+
+            // Differentiate between sent and received messages
+            if (msg.nodeId === currentNodeId) {
+              li.classList.add('sent');
+            } else {
+              li.classList.add('received');
+              if (msg.source === '[LoRa]') {
+                li.classList.add('lora');
+              } else {
+                li.classList.add('wifi');
+              }
+            }
+
+            // Store the timestamp when the message is received, if it doesn't already exist
+            if (!messageTimestamps[msg.messageID]) {
+              messageTimestamps[msg.messageID] = Date.now();  // Save the timestamp in milliseconds
+            }
+            const timestamp = formatTimestamp(messageTimestamps[msg.messageID]);
+
+            // Only show node ID if the message is received, not if it's sent
+            const nodeIdHtml = (msg.nodeId !== currentNodeId) ? 
+              `<span class="message-nodeid">Node: ${msg.nodeId}</span>` : '';
+
+            li.innerHTML = `
+              ${nodeIdHtml}
+              <div class="message-content">${msg.sender}: ${msg.message}</div>
+              <span class="message-time">${timestamp}</span>
+            `;
+            ul.appendChild(li);
+          });
+
+          ul.scrollTop = ul.scrollHeight; // Auto scroll to the latest message
+        })
+        .catch(error => console.error('Error fetching messages:', error));
+
+      fetch('/deviceCount')
+        .then(response => response.json())
+        .then(data => {
+          localStorage.setItem('nodeId', data.nodeId);
+          document.getElementById('deviceCount').innerHTML = 
+            'Mesh Nodes: <a href="/nodes">' + data.totalCount + '</a>, Node ID: ' + data.nodeId;
+        })
+        .catch(error => console.error('Error fetching device count:', error));
+    }
+
+    window.onload = function() {
+      const savedName = localStorage.getItem('username');
+      if (savedName) {
+        document.getElementById('nameInput').value = savedName;
+      }
+
+      fetchData();
+      setInterval(fetchData, 5000);
+      document.getElementById('messageForm').addEventListener('submit', sendMessage);
+    };
+  </script>
 </head>
 <body>
-<h2>Meshify 1.0</h2>
-<div class='warning'>For your safety, do not share your location or any personal information!</div>
-<form id="messageForm">
-  <input type="text" id="nameInput" name="sender" placeholder="Enter your name" required maxlength="15" />
-  <input type="text" id="messageInput" name="msg" placeholder="Enter your message" required maxlength="100" />
-  <input type="submit" value="Send" />
-</form>
-<div id='deviceCount'>Mesh Nodes: 0</div>
-<a href="/nodes">View Mesh Nodes List</a><br>
-<ul id='messageList'></ul>
-<p>github.com/djcasper1975</p>
+  <!-- Warning message at the top -->
+  <div class="warning">For your safety, do not share your location or any personal information!</div>
+  
+  <!-- Title below warning -->
+  <h2>Meshify Chat</h2>
+  
+  <div id="deviceCount">Mesh Nodes: 0</div>
+  
+  <div id="chat-container">
+    <ul id="messageList"></ul>
+  </div>
+  
+  <form id="messageForm">
+    <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required>
+    <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="100" required>
+    <input type="submit" value="Send">
+  </form>
 </body>
 </html>
 )rawliteral";
 
-// Nodes List HTML Page Content
+
 const char nodesPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-  body { font-family: Arial, sans-serif; margin: 0; padding: 0; text-align: center; }
-  h1, h2 { color: #333; }
-  ul { list-style-type: none; padding: 0; margin: 20px auto; max-width: 500px; }
-  li { background-color: #f9f9f9; margin: 5px 0; padding: 10px; border-radius: 5px; word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; }
-  #nodeCount { margin: 20px auto; max-width: 500px; }
-</style>
-<script>
-function fetchNodes() {
-  fetch('/nodesData').then(response => response.json()).then(data => {
-    const ul = document.getElementById('nodeList');
-    ul.innerHTML = data.nodes.map((node, index) => `<li>Node ${index + 1}: ${node}</li>`).join('');
-    document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
-  })
-  .catch(error => console.error('Error fetching nodes:', error));
-}
-window.onload = function() {
-  fetchNodes();
-  setInterval(fetchNodes, 5000);
-};
-</script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      margin: 0; 
+      padding: 0; 
+      text-align: center; 
+      background-color: #f4f7f6;
+    }
+    h2 { 
+      color: #333; 
+      margin-top: 20px;
+    }
+    ul { 
+      list-style-type: none; 
+      padding: 0; 
+      margin: 20px auto; 
+      max-width: 500px; 
+    }
+    .node {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 10px 0;
+      padding: 15px;
+      border-radius: 10px;
+      width: 100%;
+      max-width: 500px;
+      box-sizing: border-box;
+      border: 2px solid;
+      text-align: center;
+      font-weight: bold;
+      font-size: 1.1em;
+    }
+    .node.wifi {
+      background-color: #e7f0ff; /* Light blue background for Wi-Fi nodes */
+      border-color: blue; /* Blue border for Wi-Fi nodes */
+    }
+    .node.lora {
+      background-color: #fff4e0; /* Light orange background for LoRa nodes */
+      border-color: orange; /* Orange border for LoRa nodes */
+    }
+    #nodeCount { 
+      margin: 20px auto; 
+      max-width: 500px; 
+      font-weight: bold;
+    }
+    a {
+      margin-top: 20px;
+      display: inline-block;
+      text-decoration: none;
+      color: #007bff;
+      font-weight: bold;
+    }
+  </style>
+  <script>
+    function fetchNodes() {
+      fetch('/nodesData')
+        .then(response => response.json())
+        .then(data => {
+          const ul = document.getElementById('nodeList');
+          ul.innerHTML = '';
+          
+          data.nodes.forEach((node, index) => {
+            const li = document.createElement('li');
+            const nodeType = node.startsWith('LoRa') ? 'lora' : 'wifi'; // Determine node type
+            
+            li.classList.add('node', nodeType);
+            li.textContent = 'Node ' + (index + 1) + ': ' + node;
+            
+            ul.appendChild(li);
+          });
+          
+          document.getElementById('nodeCount').textContent = 'Mesh Nodes Connected: ' + data.nodes.length;
+        })
+        .catch(error => console.error('Error fetching nodes:', error));
+    }
+
+    window.onload = function() {
+      fetchNodes();
+      setInterval(fetchNodes, 5000); // Refresh node list every 5 seconds
+    };
+  </script>
 </head>
 <body>
-<h2>Mesh Nodes Connected</h2>
-<div id='nodeCount'>Mesh Nodes Connected: 0</div>
-<ul id='nodeList'></ul>
-<a href="/">Back to Main Page</a>
+  <h2>Wifi Nodes Connected</h2>
+  <div id="nodeCount">Mesh Nodes Connected: 0</div>
+  <ul id="nodeList"></ul>
+  <a href="/">Back to Main Page</a>
 </body>
 </html>
 )rawliteral";
