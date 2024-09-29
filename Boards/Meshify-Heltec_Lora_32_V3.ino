@@ -1,3 +1,4 @@
+// all boards must have the same version installed.....
 #define HELTEC_POWER_BUTTON // Use the power button feature of Heltec
 #include <heltec_unofficial.h> // Heltec library for OLED and LoRa
 #include <painlessMesh.h>
@@ -13,6 +14,7 @@
 struct TransmissionStatus {
   bool transmittedViaWiFi = false;
   bool transmittedViaLoRa = false;
+  bool addedToMessages = false;  // Flag to track if the message has been added to messages vector
 };
 
 // Map to track retransmissions
@@ -132,11 +134,13 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
     content = content.substring(0, maxMessageLength);
   }
 
-  // Check if the message already exists, if so, do not add
+  // Retrieve the transmission status for this messageID
   auto& status = messageTransmissions[messageID];
-  if (status.transmittedViaWiFi || status.transmittedViaLoRa) {
-    Serial.println("Message already exists, skipping...");
-    return;  // Message already exists
+  
+  // **Check if the message has already been added to the messages vector**
+  if (status.addedToMessages) {
+    Serial.println("Message already exists in view, skipping addition...");
+    return;  // Message has already been added, skip
   }
 
   // If the message is from our own node, do not include the source tag
@@ -150,6 +154,12 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
 
   // Insert the new message at the beginning of the list
   messages.insert(messages.begin(), newMessage);
+
+  // **Mark the message as added to prevent future duplicates**
+  status.addedToMessages = true;
+
+  // **Do not set the transmission flags here**
+  // These will be set after successful transmission
 
   // Ensure the list doesn't exceed maxMessages
   if (messages.size() > maxMessages) {
