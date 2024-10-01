@@ -1,4 +1,4 @@
-// all boards must have the same version installed.....
+// All boards must have the same version installed.....
 #define HELTEC_POWER_BUTTON // Use the power button feature of Heltec
 #include <heltec_unofficial.h> // Heltec library for OLED and LoRa
 #include <painlessMesh.h>
@@ -80,8 +80,8 @@ void setupLora() {
 #define MESH_PORT 5555
 const int maxMessages = 10;
 
-// Duty Cycle Variables
-bool bypassDutyCycle = false;     // Set to true to bypass duty cycle check
+// Duty Cycle Variables For Bypass (Testing Only Please Use Low Power if True)
+bool bypassDutyCycle = false;     // Set to true to bypass duty cycle check (please use low power)
 bool dutyCycleActive = false;     // Tracks if duty cycle limit is reached
 bool lastDutyCycleActive = false; // Tracks the last known duty cycle state
 
@@ -530,7 +530,6 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       display: flex;
       position: fixed;
       bottom: 0;
-      left: 0;
       background-color: #fff;
       padding: 10px;
       box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
@@ -615,6 +614,7 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       text-decoration: underline;
     }
   </style>
+  
   <script>
     const messageTimestamps = {};  // Object to store timestamps for each message
 
@@ -628,7 +628,8 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
 
       const nameInput = document.getElementById('nameInput');
       const messageInput = document.getElementById('messageInput');
-      
+      const sendButton = document.getElementById('sendButton'); // Get the send button
+
       const sender = nameInput.value;
       const msg = messageInput.value;
 
@@ -643,6 +644,10 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       formData.append('sender', sender);
       formData.append('msg', msg);
 
+      // Disable the send button and provide user feedback
+      sendButton.disabled = true;
+      sendButton.value = 'Sending...';
+
       fetch('/update', {
         method: 'POST',
         body: formData
@@ -651,8 +656,21 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
         if (!response.ok) throw new Error('Failed to send message');
         messageInput.value = '';
         fetchData();  // Fetch new messages
+
+        // Re-enable the send button after 5 seconds
+        setTimeout(() => {
+          sendButton.disabled = false;
+          sendButton.value = 'Send';
+        }, 5000);
       })
-      .catch(error => console.error('Error sending message:', error));
+      .catch(error => {
+        console.error('Error sending message:', error);
+
+        // Re-enable the send button even if there's an error
+        sendButton.disabled = false;
+        sendButton.value = 'Send';
+        alert('Failed to send message. Please try again.');
+      });
     }
 
     function fetchData() {
@@ -740,12 +758,11 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
   <form id="messageForm">
     <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required>
     <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="100" required>
-    <input type="submit" value="Send">
+    <input type="submit" id="sendButton" value="Send"> <!-- Added id="sendButton" -->
   </form>
 </body>
 </html>
 )rawliteral";
-
 
 const char nodesPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -782,16 +799,18 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
       box-sizing: border-box;
       border: 2px solid;
       text-align: center;
-      font-weight: bold;
-      font-size: 1.1em;
+      /* Updated styles to match received messages */
+      font-size: 0.85em; /* Matches .message-content */
+      color: #333;       /* Matches .message-content */
+      font-weight: normal; /* Removes bold styling */
     }
     .node.wifi {
       background-color: #e7f0ff; /* Light blue background for Wi-Fi nodes */
-      border-color: blue; /* Blue border for Wi-Fi nodes */
+      border-color: blue;        /* Blue border for Wi-Fi nodes */
     }
     .node.lora {
       background-color: #fff4e0; /* Light orange background for LoRa nodes */
-      border-color: orange; /* Orange border for LoRa nodes */
+      border-color: orange;      /* Orange border for LoRa nodes */
     }
     #nodeCount { 
       margin: 20px auto; 
@@ -836,13 +855,13 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
   </script>
 </head>
 <body>
-  <h2>Wifi Nodes Connected</h2>
   <div id="nodeCount">Mesh Nodes Connected: 0</div>
   <ul id="nodeList"></ul>
   <a href="/">Back to Main Page</a>
 </body>
 </html>
 )rawliteral";
+
 
 // Server Routes Setup
 void setupServerRoutes() {
