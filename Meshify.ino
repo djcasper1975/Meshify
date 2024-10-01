@@ -10,7 +10,7 @@
 
 // Meshify Parameters
 #define MESH_SSID "Meshify 1.0"
-#define MESH_PASSWORD "" // not used yet!!!
+#define MESH_PASSWORD ""
 #define MESH_PORT 5555
 const int maxMessages = 10;
 
@@ -308,14 +308,17 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       text-decoration: underline;
     }
   </style>
-  <script>
-    const messageTimestamps = {};  // Object to store timestamps for each message
+<script>
+    // Object to store timestamps for each message, keyed by messageID
+    const messageTimestamps = {}; 
 
+    // Function to format the timestamp for display
     function formatTimestamp(timestamp) {
       const date = new Date(timestamp);
       return date.toLocaleTimeString();  // Adjust the format as needed
     }
 
+    // Function to send a message via the form
     function sendMessage(event) {
       event.preventDefault();
 
@@ -348,12 +351,13 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       .catch(error => console.error('Error sending message:', error));
     }
 
+    // Function to fetch messages and update the UI
     function fetchData() {
       fetch('/messages')
         .then(response => response.json())
         .then(data => {
           const ul = document.getElementById('messageList');
-          ul.innerHTML = '';
+          ul.innerHTML = '';  // Clear the list before appending new messages
 
           const currentNodeId = localStorage.getItem('nodeId');
 
@@ -361,25 +365,27 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
             const li = document.createElement('li');
             li.classList.add('message');
 
-            // Differentiate between sent and received messages
+            // Determine whether the message is sent or received
             if (msg.nodeId === currentNodeId) {
               li.classList.add('sent');
             } else {
               li.classList.add('received');
-                li.classList.add('wifi');
-              }
+              li.classList.add('wifi');
             }
 
-            // Store the timestamp when the message is received, if it doesn't already exist
+            // Check if the message already has a timestamp; if not, add it
             if (!messageTimestamps[msg.messageID]) {
-              messageTimestamps[msg.messageID] = Date.now();  // Save the timestamp in milliseconds
+              messageTimestamps[msg.messageID] = Date.now();  // Set the timestamp when the message is first received
             }
+
+            // Format the timestamp for display
             const timestamp = formatTimestamp(messageTimestamps[msg.messageID]);
 
-            // Only show node ID if the message is received, not if it's sent
+            // Optionally display the node ID if it's a received message
             const nodeIdHtml = (msg.nodeId !== currentNodeId) ? 
               `<span class="message-nodeid">Node: ${msg.nodeId}</span>` : '';
 
+            // Insert the message and timestamp into the UI
             li.innerHTML = `
               ${nodeIdHtml}
               <div class="message-content">${msg.sender}: ${msg.message}</div>
@@ -388,7 +394,8 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
             ul.appendChild(li);
           });
 
-          ul.scrollTop = ul.scrollHeight; // Auto scroll to the latest message
+          // Scroll to the bottom of the message list to show the most recent message
+          ul.scrollTop = ul.scrollHeight;
         })
         .catch(error => console.error('Error fetching messages:', error));
 
@@ -402,17 +409,18 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
         .catch(error => console.error('Error fetching device count:', error));
     }
 
+    // Event listener for when the page is loaded
     window.onload = function() {
       const savedName = localStorage.getItem('username');
       if (savedName) {
         document.getElementById('nameInput').value = savedName;
       }
 
-      fetchData();
-      setInterval(fetchData, 5000);
+      fetchData();  // Fetch the initial set of messages
+      setInterval(fetchData, 5000);  // Fetch messages every 5 seconds
       document.getElementById('messageForm').addEventListener('submit', sendMessage);
     };
-  </script>
+</script>
 </head>
 <body>
   <!-- Warning message at the top -->
@@ -427,11 +435,11 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
     <ul id="messageList"></ul>
   </div>
   
-  <form id="messageForm">
-    <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required>
-    <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="100" required>
-    <input type="submit" value="Send">
-  </form>
+<form id="messageForm">
+  <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required>
+  <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="100" required>
+  <input type="submit" value="Send">
+</form>
 </body>
 </html>
 )rawliteral";
