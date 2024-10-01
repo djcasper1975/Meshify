@@ -10,7 +10,7 @@
 
 // Meshify Parameters
 #define MESH_SSID "Meshify 1.0"
-#define MESH_PASSWORD ""
+#define MESH_PASSWORD "" // not used yet!!!
 #define MESH_PORT 5555
 const int maxMessages = 10;
 
@@ -272,19 +272,14 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       word-wrap: break-word;
     }
     .message.sent {
-      align-self: flex-start;
+      align-self: flex-end;
       border-color: green;
       background-color: #eaffea;
     }
     .message.received.wifi {
-      align-self: flex-end;
+      align-self: flex-start;
       border-color: blue;
       background-color: #e7f0ff;
-    }
-    .message.received.lora {
-      align-self: flex-end;
-      border-color: orange;
-      background-color: #fff4e0;
     }
     .message-nodeid {
       font-size: 0.7em; /* Make the Node ID smaller */
@@ -371,9 +366,6 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
               li.classList.add('sent');
             } else {
               li.classList.add('received');
-              if (msg.source === '[LoRa]') {
-                li.classList.add('lora');
-              } else {
                 li.classList.add('wifi');
               }
             }
