@@ -76,7 +76,7 @@ void setupLora() {
 
 // Meshify Parameters
 #define MESH_SSID "Meshify 1.0"
-#define MESH_PASSWORD ""
+#define MESH_PASSWORD ""  //not used yet.
 #define MESH_PORT 5555
 const int maxMessages = 10;
 
@@ -573,17 +573,17 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       word-wrap: break-word;
     }
     .message.sent {
-      align-self: flex-start;
+      align-self: flex-end;
       border-color: green;
       background-color: #eaffea;
     }
     .message.received.wifi {
-      align-self: flex-end;
+      align-self: flex-start;
       border-color: blue;
       background-color: #e7f0ff;
     }
     .message.received.lora {
-      align-self: flex-end;
+      align-self: flex-start;
       border-color: orange;
       background-color: #fff4e0;
     }
@@ -615,132 +615,140 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
     }
   </style>
   
-  <script>
-    const messageTimestamps = {};  // Object to store timestamps for each message
+<script>
+  const messageTimestamps = {};  // Object to store timestamps for each message
 
-    function formatTimestamp(timestamp) {
-      const date = new Date(timestamp);
-      return date.toLocaleTimeString();  // Adjust the format as needed
+  // Function to format the timestamp for display
+  function formatTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString();  // Adjust the format as needed (for example, add date if necessary)
+  }
+
+  // Function to send a message via the form
+  function sendMessage(event) {
+    event.preventDefault();
+
+    const nameInput = document.getElementById('nameInput');
+    const messageInput = document.getElementById('messageInput');
+    const sendButton = document.getElementById('sendButton'); // Get the send button
+
+    const sender = nameInput.value;
+    const msg = messageInput.value;
+
+    if (!sender || !msg) {
+      alert('Please enter both a name and a message.');
+      return;
     }
 
-    function sendMessage(event) {
-      event.preventDefault();
+    localStorage.setItem('username', sender);
 
-      const nameInput = document.getElementById('nameInput');
-      const messageInput = document.getElementById('messageInput');
-      const sendButton = document.getElementById('sendButton'); // Get the send button
+    const formData = new URLSearchParams();
+    formData.append('sender', sender);
+    formData.append('msg', msg);
 
-      const sender = nameInput.value;
-      const msg = messageInput.value;
+    // Disable the send button and provide user feedback
+    sendButton.disabled = true;
+    sendButton.value = 'Sending...';
 
-      if (!sender || !msg) {
-        alert('Please enter both a name and a message.');
-        return;
-      }
+    fetch('/update', {
+      method: 'POST',
+      body: formData
+    })
+    .then(response => {
+      if (!response.ok) throw new Error('Failed to send message');
+      messageInput.value = '';
+      fetchData();  // Fetch new messages
 
-      localStorage.setItem('username', sender);
-
-      const formData = new URLSearchParams();
-      formData.append('sender', sender);
-      formData.append('msg', msg);
-
-      // Disable the send button and provide user feedback
-      sendButton.disabled = true;
-      sendButton.value = 'Sending...';
-
-      fetch('/update', {
-        method: 'POST',
-        body: formData
-      })
-      .then(response => {
-        if (!response.ok) throw new Error('Failed to send message');
-        messageInput.value = '';
-        fetchData();  // Fetch new messages
-
-        // Re-enable the send button after 5 seconds
-        setTimeout(() => {
-          sendButton.disabled = false;
-          sendButton.value = 'Send';
-        }, 5000);
-      })
-      .catch(error => {
-        console.error('Error sending message:', error);
-
-        // Re-enable the send button even if there's an error
+      // Re-enable the send button after 5 seconds
+      setTimeout(() => {
         sendButton.disabled = false;
         sendButton.value = 'Send';
-        alert('Failed to send message. Please try again.');
-      });
-    }
+      }, 5000);
+    })
+    .catch(error => {
+      console.error('Error sending message:', error);
 
-    function fetchData() {
-      fetch('/messages')
-        .then(response => response.json())
-        .then(data => {
-          const ul = document.getElementById('messageList');
-          ul.innerHTML = '';
+      // Re-enable the send button even if there's an error
+      sendButton.disabled = false;
+      sendButton.value = 'Send';
+      alert('Failed to send message. Please try again.');
+    });
+  }
 
-          const currentNodeId = localStorage.getItem('nodeId');
+  // Function to fetch messages and update the UI
+  function fetchData() {
+    fetch('/messages')
+      .then(response => response.json())
+      .then(data => {
+        const ul = document.getElementById('messageList');
+        ul.innerHTML = '';  // Clear the list before appending new messages
 
-          data.messages.forEach(msg => {
-            const li = document.createElement('li');
-            li.classList.add('message');
+        const currentNodeId = localStorage.getItem('nodeId');
 
-            // Differentiate between sent and received messages
-            if (msg.nodeId === currentNodeId) {
-              li.classList.add('sent');
+        data.messages.forEach(msg => {
+          const li = document.createElement('li');
+          li.classList.add('message');
+
+          // Determine whether the message is sent or received
+          if (msg.nodeId === currentNodeId) {
+            li.classList.add('sent');
+          } else {
+            li.classList.add('received');
+            if (msg.source === '[LoRa]') {
+              li.classList.add('lora');
             } else {
-              li.classList.add('received');
-              if (msg.source === '[LoRa]') {
-                li.classList.add('lora');
-              } else {
-                li.classList.add('wifi');
-              }
+              li.classList.add('wifi');
             }
+          }
 
-            // Store the timestamp when the message is received, if it doesn't already exist
-            if (!messageTimestamps[msg.messageID]) {
-              messageTimestamps[msg.messageID] = Date.now();  // Save the timestamp in milliseconds
-            }
-            const timestamp = formatTimestamp(messageTimestamps[msg.messageID]);
+          // Store the timestamp when the message is received, if it doesn't already exist
+          if (!messageTimestamps[msg.messageID]) {
+            messageTimestamps[msg.messageID] = Date.now();  // Set the timestamp when the message is first received
+          }
 
-            // Only show node ID if the message is received, not if it's sent
-            const nodeIdHtml = (msg.nodeId !== currentNodeId) ? 
-              `<span class="message-nodeid">Node: ${msg.nodeId}</span>` : '';
+          // Format the timestamp for display
+          const timestamp = formatTimestamp(messageTimestamps[msg.messageID]);
 
-            li.innerHTML = `
-              ${nodeIdHtml}
-              <div class="message-content">${msg.sender}: ${msg.message}</div>
-              <span class="message-time">${timestamp}</span>
-            `;
-            ul.appendChild(li);
-          });
+          // Optionally display the node ID if it's a received message
+          const nodeIdHtml = (msg.nodeId !== currentNodeId) ? 
+            `<span class="message-nodeid">Node: ${msg.nodeId}</span>` : '';
 
-          ul.scrollTop = ul.scrollHeight; // Auto scroll to the latest message
-        })
-        .catch(error => console.error('Error fetching messages:', error));
+          // Insert the message and timestamp into the UI
+          li.innerHTML = `
+            ${nodeIdHtml}
+            <div class="message-content">${msg.sender}: ${msg.message}</div>
+            <span class="message-time">${timestamp}</span>
+          `;
+          ul.appendChild(li);
+        });
 
-      fetch('/deviceCount')
-        .then(response => response.json())
-        .then(data => {
-          localStorage.setItem('nodeId', data.nodeId);
-          document.getElementById('deviceCount').innerHTML = 
-            'Mesh Nodes: <a href="/nodes">' + data.totalCount + '</a>, Node ID: ' + data.nodeId;
-        })
-        .catch(error => console.error('Error fetching device count:', error));
+        // Scroll to the bottom of the message list to show the most recent message
+        ul.scrollTop = ul.scrollHeight;
+      })
+      .catch(error => console.error('Error fetching messages:', error));
+
+    fetch('/deviceCount')
+      .then(response => response.json())
+      .then(data => {
+        localStorage.setItem('nodeId', data.nodeId);
+        document.getElementById('deviceCount').innerHTML = 
+          'Mesh Nodes: <a href="/nodes">' + data.totalCount + '</a>, Node ID: ' + data.nodeId;
+      })
+      .catch(error => console.error('Error fetching device count:', error));
+  }
+
+  // Event listener for when the page is loaded
+  window.onload = function() {
+    const savedName = localStorage.getItem('username');
+    if (savedName) {
+      document.getElementById('nameInput').value = savedName;
     }
 
-    window.onload = function() {
-      const savedName = localStorage.getItem('username');
-      if (savedName) {
-        document.getElementById('nameInput').value = savedName;
-      }
-
-      fetchData();
-      setInterval(fetchData, 5000);
-      document.getElementById('messageForm').addEventListener('submit', sendMessage);
-    };
-  </script>
+    fetchData();  // Fetch the initial set of messages
+    setInterval(fetchData, 5000);  // Fetch messages every 5 seconds
+    document.getElementById('messageForm').addEventListener('submit', sendMessage);
+  };
+</script>
 </head>
 <body>
   <!-- Warning message at the top -->
@@ -755,11 +763,11 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
     <ul id="messageList"></ul>
   </div>
   
-  <form id="messageForm">
-    <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required>
-    <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="100" required>
-    <input type="submit" id="sendButton" value="Send"> <!-- Added id="sendButton" -->
-  </form>
+<form id="messageForm">
+  <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required>
+  <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="100" required>
+  <input type="submit" id="sendButton" value="Send"> <!-- Added id="sendButton" -->
+</form>
 </body>
 </html>
 )rawliteral";
