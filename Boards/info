@@ -1,1 +1,13 @@
-Here you can find different versions for various boards when available for testing.
+How It Works
+Initialization: Upon startup, the system initializes the mesh network and sets up the web server.
+Message Sending: Users can enter their name and a message in the web interface. When they submit the form, the message is sent to the server, where it is processed and scheduled for transmission.
+Transmission: The message is transmitted via LoRa, and if successful, it is also sent via Wi-Fi. The system tracks whether the message has been transmitted on both networks.
+Receiving Messages: When a device receives a message, it checks if it has already processed it. If not, it adds the message to its local list and schedules it for retransmission if necessary.
+User Interface Updates: The web page updates in real-time to reflect new messages and connected nodes.
+Node Lists and Communication
+Currently, the implementation focuses on Wi-Fi node lists and does not include LoRa nodes in the displayed node list. However, LoRa is still utilized to relay messages between nodes effectively. This can be further enhanced by displaying both types of nodes in the user interface in future iterations.
+
+Important Note
+Firmware Version Consistency: All boards participating in the network must run the same firmware version for optimal communication and functionality.
+Conclusion
+This code presents a robust framework for a mesh networking application using Wi-Fi and LoRa technologies. It emphasizes efficient message management, real-time communication, and user-friendly web interfaces, making it suitable for applications requiring reliable long-range communication in distributed networks.
