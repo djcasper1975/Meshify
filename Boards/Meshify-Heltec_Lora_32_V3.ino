@@ -27,7 +27,7 @@ std::map<String, TransmissionStatus> messageTransmissions;
 #define BANDWIDTH 250.0
 #define SPREADING_FACTOR 11
 #define TRANSMIT_POWER 21
-#define CODING_RATE 5  // Coding rate 4/5 // not sre this is even working !! may remove for testing soon.
+#define CODING_RATE 8  // Coding rate 4/5 // not sre this is even working !! may remove for testing soon.
 String rxdata;
 volatile bool rxFlag = false;
 long counter = 0;
