@@ -78,7 +78,7 @@ void setupLora() {
 #define MESH_SSID "Meshify 1.0"
 #define MESH_PASSWORD ""  //not used yet.
 #define MESH_PORT 5555
-const int maxMessages = 10;
+const int maxMessages = 50;
 
 // Duty Cycle Variables For Bypass (Testing Only Please Use Low Power if True)
 bool bypassDutyCycle = false;     // Set to true to bypass duty cycle check (please use low power)
