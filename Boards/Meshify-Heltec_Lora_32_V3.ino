@@ -342,22 +342,23 @@ void setup() {
 }
 
 void loop() {
-  esp_task_wdt_reset();
+  esp_task_wdt_reset();  // Reset watchdog timer to prevent reset
 
-  heltec_loop();
+  heltec_loop();  // Run Heltec-specific operations
 
-  // No need to call isDutyCycleAllowed() here separately
+  // Update the mesh network to ensure message synchronization
+  mesh.update();
 
   // Process LoRa reception
   if (rxFlag) {
-    rxFlag = false;  // Reset flag
+    rxFlag = false;  // Reset flag after handling the message
     String message;
     int state = radio.readData(message);
     if (state == RADIOLIB_ERR_NONE) {
       Serial.printf("[LoRa Rx] Received message: %s\n", message.c_str());
       // Process the received message
 
-      // Extract the message ID, sender, and content from the message
+      // Extract message ID, sender, and content
       int firstSeparator = message.indexOf('|');
       int secondSeparator = message.indexOf('|', firstSeparator + 1);
 
@@ -368,11 +369,11 @@ void loop() {
         String sender = message.substring(firstSeparator + 1, secondSeparator);
         String messageContent = message.substring(secondSeparator + 1);
 
-        // **Extract nodeId from messageID**
+        // Extract nodeId from messageID
         int colonIndex = messageID.indexOf(':');
         String nodeId = messageID.substring(0, colonIndex);
 
-        // Avoid processing and retransmitting messages from your own node
+        // Avoid processing messages from your own node
         if (sender == String(getNodeId())) {
           Serial.println("[LoRa Rx] Received own message, ignoring...");
         } else {
@@ -381,38 +382,31 @@ void loop() {
           if (status.transmittedViaWiFi && status.transmittedViaLoRa) {
             Serial.println("[LoRa Rx] Message already retransmitted via both WiFi and LoRa, ignoring...");
           } else {
-            // Add the message to the message list (tracking both WiFi and LoRa)
-            Serial.printf("[LoRa Rx] Adding message: %s\n", message.c_str()); // Added log
-            addMessage(nodeId, messageID, sender, messageContent, "[LoRa]");  // **Use the extracted nodeId**
+            // Add the message to the list and schedule retransmission if needed
+            addMessage(nodeId, messageID, sender, messageContent, "[LoRa]");
 
-            // **Schedule LoRa transmission first**
             if (!status.transmittedViaLoRa) {
-              scheduleLoRaTransmission(message);  // Schedule LoRa retransmission
+              scheduleLoRaTransmission(message);
             }
-
-            // **WiFi transmission will be handled after LoRa transmission**
-            // No immediate action needed here
           }
         }
       }
     } else {
       Serial.printf("[LoRa Rx] Receive failed, code %d\n", state);
     }
-    // Restart receiving
+    // Restart LoRa reception to listen for more messages
     radio.startReceive();
   }
 
-  // **Handle Scheduled LoRa Transmission**
+  // Handle scheduled LoRa transmission
   if (!fullMessage.isEmpty() && millis() >= loRaTransmitDelay) {
-    transmitWithDutyCycle(fullMessage);  // Use message with message ID for LoRa transmission
-    fullMessage = "";                    // Clear the fullMessage after transmission to avoid retransmission
+    transmitWithDutyCycle(fullMessage);  // Transmit the message with duty cycle checks
+    fullMessage = "";  // Clear the full message after transmission
   }
 
-  updateMeshData();
-
-  updateDisplay();  // Refresh the display with current mesh data
-
-  dnsServer.processNextRequest();
+  updateMeshData();  // Update mesh node information
+  updateDisplay();   // Update OLED display with current status
+  dnsServer.processNextRequest();  // Handle DNS requests if any
 }
 
 // Meshify Initialization Function
