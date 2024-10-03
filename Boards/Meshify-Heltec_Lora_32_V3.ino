@@ -76,7 +76,7 @@ void setupLora() {
 
 // Meshify Parameters
 #define MESH_SSID "Meshify 1.0"
-#define MESH_PASSWORD ""  // Not used yet.
+#define MESH_PASSWORD ""  
 #define MESH_PORT 5555
 const int maxMessages = 50;
 
@@ -322,7 +322,7 @@ void setup() {
 
   setupLora();
 
-  WiFi.mode(WIFI_AP);
+  WiFi.softAP(MESH_SSID, MESH_PASSWORD);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.setSleep(false);
   initMesh();
