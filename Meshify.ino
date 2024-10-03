@@ -547,7 +547,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 void setup() {
   Serial.begin(115200);
 
-  WiFi.mode(WIFI_AP);
+  WiFi.softAP(MESH_SSID, MESH_PASSWORD);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.setSleep(false);
   initMesh();
