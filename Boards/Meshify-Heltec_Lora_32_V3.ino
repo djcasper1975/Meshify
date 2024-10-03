@@ -23,7 +23,7 @@ std::map<String, TransmissionStatus> messageTransmissions;
 // LoRa Parameters
 #include <RadioLib.h>
 #define PAUSE 10000  // 10% duty cycle (10 seconds max transmission in 100 seconds)
-#define FREQUENCY 869.525
+#define FREQUENCY 869.4625
 #define BANDWIDTH 250.0
 #define SPREADING_FACTOR 11
 #define TRANSMIT_POWER 21
@@ -175,7 +175,7 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
 // This function schedules LoRa transmission by setting the message and the delay
 void scheduleLoRaTransmission(const String& message) {
   fullMessage = message;
-  loRaTransmitDelay = millis() + random(3000, 5001); // Set delay between 3000ms and 5000ms
+  loRaTransmitDelay = millis() + random(3500, 6501); // Set delay between 3000ms and 5000ms
   Serial.printf("[LoRa Schedule] Message scheduled for LoRa transmission after %lu ms: %s\n", 
                 loRaTransmitDelay - millis(), message.c_str());
 }
