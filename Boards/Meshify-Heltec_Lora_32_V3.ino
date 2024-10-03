@@ -27,7 +27,7 @@ std::map<String, TransmissionStatus> messageTransmissions;
 #define BANDWIDTH 250.0
 #define SPREADING_FACTOR 11
 #define TRANSMIT_POWER 21
-#define CODING_RATE 8  // Coding rate 4/5 // not sre this is even working !! may remove for testing soon.
+#define CODING_RATE 8  // Coding rate 4/5 // not sure if this is even working !! may remove for testing soon.
 String rxdata;
 volatile bool rxFlag = false;
 long counter = 0;
@@ -76,7 +76,7 @@ void setupLora() {
 
 // Meshify Parameters
 #define MESH_SSID "Meshify 1.0"
-#define MESH_PASSWORD ""  //not used yet.
+#define MESH_PASSWORD ""  // Not used yet.
 #define MESH_PORT 5555
 const int maxMessages = 50;
 
@@ -97,6 +97,8 @@ struct Message {
   String content;
   String source;     // Indicates message source (WiFi or LoRa)
   String messageID;  // Unique message ID
+  int rssi;          // RSSI value, applicable for LoRa
+  float snr;         // SNR value, applicable for LoRa
 };
 
 // Rolling list for messages
@@ -125,7 +127,7 @@ String constructMessage(const String& messageID, const String& sender, const Str
 }
 
 // Function to add a message with a unique ID and size limit
-void addMessage(const String& nodeId, const String& messageID, const String& sender, String content, const String& source) {
+void addMessage(const String& nodeId, const String& messageID, const String& sender, String content, const String& source, int rssi = 0, float snr = 0.0) {
   const int maxMessageLength = 100;
 
   // Truncate the message if it exceeds the maximum allowed length
@@ -150,7 +152,7 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
   }
 
   // Create the new message
-  Message newMessage = {nodeId, sender, content, finalSource, messageID};
+  Message newMessage = {nodeId, sender, content, finalSource, messageID, rssi, snr};
 
   // Insert the new message at the beginning of the list
   messages.insert(messages.begin(), newMessage);
@@ -167,15 +169,15 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
   }
 
   // Log the message
-  Serial.printf("Message added: NodeID: %s, Sender: %s, Content: %s, Source: %s, MessageID: %s\n",
-                nodeId.c_str(), sender.c_str(), content.c_str(), finalSource.c_str(), messageID.c_str());
+  Serial.printf("Message added: NodeID: %s, Sender: %s, Content: %s, Source: %s, MessageID: %s, RSSI: %d, SNR: %.2f\n",
+                nodeId.c_str(), sender.c_str(), content.c_str(), finalSource.c_str(), messageID.c_str(), rssi, snr);
 }
 
 // **New Function: Schedule LoRa Transmission**
 // This function schedules LoRa transmission by setting the message and the delay
 void scheduleLoRaTransmission(const String& message) {
   fullMessage = message;
-  loRaTransmitDelay = millis() + random(3500, 6501); // Set delay between 3000ms and 5000ms
+  loRaTransmitDelay = millis() + random(3500, 6501); // Set delay between 3500ms and 6500ms
   Serial.printf("[LoRa Schedule] Message scheduled for LoRa transmission after %lu ms: %s\n", 
                 loRaTransmitDelay - millis(), message.c_str());
 }
@@ -373,6 +375,12 @@ void loop() {
         int colonIndex = messageID.indexOf(':');
         String nodeId = messageID.substring(0, colonIndex);
 
+        // Get RSSI and SNR
+        int rssi = radio.getRSSI();
+        float snr = radio.getSNR();
+
+        Serial.printf("[LoRa Rx] RSSI: %d dBm, SNR: %.2f dB\n", rssi, snr);
+
         // Avoid processing messages from your own node
         if (sender == String(getNodeId())) {
           Serial.println("[LoRa Rx] Received own message, ignoring...");
@@ -383,7 +391,7 @@ void loop() {
             Serial.println("[LoRa Rx] Message already retransmitted via both WiFi and LoRa, ignoring...");
           } else {
             // Add the message to the list and schedule retransmission if needed
-            addMessage(nodeId, messageID, sender, messageContent, "[LoRa]");
+            addMessage(nodeId, messageID, sender, messageContent, "[LoRa]", rssi, snr);
 
             if (!status.transmittedViaLoRa) {
               scheduleLoRaTransmission(message);
@@ -585,6 +593,12 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       font-size: 0.7em; /* Make the Node ID smaller */
       color: #666;
     }
+    .message-rssi-snr {
+      font-size: 0.7em;
+      color: #999;
+      text-align: right;
+      margin-top: 2px;
+    }
     .message-content {
       font-size: 0.85em; /* Message content remains larger than Node ID */
       color: #333;
@@ -707,11 +721,19 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
           const nodeIdHtml = (msg.nodeId !== currentNodeId) ? 
             `<span class="message-nodeid">Node: ${msg.nodeId}</span>` : '';
 
-          // Insert the message and timestamp into the UI
+          // Display RSSI and SNR if available and source is LoRa
+          let rssiSnrHtml = '';
+          if (msg.source === '[LoRa]' && typeof msg.rssi !== 'undefined' && typeof msg.snr !== 'undefined') {
+            rssiSnrHtml = `<span class="message-rssi-snr">RSSI: ${msg.rssi} dBm, SNR: ${msg.snr} dB</span>`;
+          }
+
+          // **Change is here: RSSI/SNR is now below the timestamp**
+          // Insert the node ID, message, timestamp, RSSI/SNR into the UI
           li.innerHTML = `
             ${nodeIdHtml}
             <div class="message-content">${msg.sender}: ${msg.message}</div>
             <span class="message-time">${timestamp}</span>
+            ${rssiSnrHtml}
           `;
           ul.appendChild(li);
         });
@@ -864,7 +886,6 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-
 // Server Routes Setup
 void setupServerRoutes() {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -881,7 +902,11 @@ void setupServerRoutes() {
     for (const auto& msg : messages) {
       if (!first) json += ",";
       // Add nodeId and messageID to the JSON object
-      json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"message\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\",\"messageID\":\"" + msg.messageID + "\"}";
+      json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"message\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\",\"messageID\":\"" + msg.messageID + "\"";
+      if (msg.source == "[LoRa]") {
+        json += ",\"rssi\":" + String(msg.rssi) + ",\"snr\":" + String(msg.snr, 2);
+      }
+      json += "}";
       first = false;
     }
     json += "]";
