@@ -177,7 +177,7 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
 // This function schedules LoRa transmission by setting the message and the delay
 void scheduleLoRaTransmission(const String& message) {
   fullMessage = message;
-  loRaTransmitDelay = millis() + random(3500, 6501); // Set delay between 3500ms and 6500ms
+  loRaTransmitDelay = millis() + random(3000, 5501); // Set delay between 3500ms and 6500ms
   Serial.printf("[LoRa Schedule] Message scheduled for LoRa transmission after %lu ms: %s\n", 
                 loRaTransmitDelay - millis(), message.c_str());
 }
