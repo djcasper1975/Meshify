@@ -23,10 +23,10 @@ std::map<String, TransmissionStatus> messageTransmissions;
 // LoRa Parameters
 #include <RadioLib.h>
 #define PAUSE 10000  // 10% duty cycle (10 seconds max transmission in 100 seconds)
-#define FREQUENCY 869.4625
+#define FREQUENCY 869.4000 // changfd frequency as we are using 250 bandwith which takes up the whole band! 869.4000 to 869.6500. This is only tesing may change.
 #define BANDWIDTH 250.0
 #define SPREADING_FACTOR 11
-#define TRANSMIT_POWER 21
+#define TRANSMIT_POWER 22 // changed to max power 22
 #define CODING_RATE 8  // Coding rate 4/5 // not sure if this is even working !! may remove for testing soon.
 String rxdata;
 volatile bool rxFlag = false;
