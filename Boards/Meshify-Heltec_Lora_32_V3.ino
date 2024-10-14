@@ -20,23 +20,24 @@ struct TransmissionStatus {
 // Map to track retransmissions
 std::map<String, TransmissionStatus> messageTransmissions;
 
-// LoRa Parameters
+// LoRa Parameters EU868
 #include <RadioLib.h>
 #define PAUSE 10000  // 10% duty cycle (10 seconds max transmission in 100 seconds)
-#define FREQUENCY 869.4000 // changfd frequency as we are using 250 bandwith which takes up the whole band! 869.4000 to 869.6500. This is only tesing may change.
-#define BANDWIDTH 250.0
-#define SPREADING_FACTOR 11
+#define FREQUENCY 869.4000 // changed frequency as we are using 250 bandwith which takes up the whole band! 869.4000 to 869.6500. This is only tesing may change.
+#define BANDWIDTH 250.0 //max 250 
+#define SPREADING_FACTOR 11 //max 12
 #define TRANSMIT_POWER 22 // changed to max power 22
-#define CODING_RATE 8  // Coding rate 4/5 // not sure if this is even working !! may remove for testing soon.
+#define CODING_RATE 8  // Coding rate max 8
 String rxdata;
 volatile bool rxFlag = false;
 long counter = 0;
+uint64_t windowStartTime = 0; // When the current 100-second window started
 uint64_t tx_time;
+uint64_t totalTxTime = 0;     // Accumulated transmission time in the current 100-second window
 uint64_t last_tx = 0;
 uint64_t minimum_pause = 0;
 unsigned long lastTransmitTime = 0;  // Timing variable for managing sequential transmissions
 String fullMessage;                  // Global variable to hold the message for sequential transmission
-
 // Function to handle LoRa received packets
 void rx() {
   rxFlag = true;
@@ -46,15 +47,25 @@ void rx() {
 #define DUTY_CYCLE_LIMIT_PERCENT 10
 #define DUTY_CYCLE_WINDOW 100000  // 100 seconds in milliseconds
 
-// Function to calculate the required pause based on the duty cycle
 void calculateDutyCyclePause(uint64_t tx_time) {
-  // Corrected the duty cycle calculation to ensure proper pause time
-  // For a 10% duty cycle over 100 seconds:
-  // Max transmit time = 10 seconds, hence pause = 90 seconds
-  // Formula: minimum_pause = DUTY_CYCLE_WINDOW * (DUTY_CYCLE_LIMIT_PERCENT / 100.0) - tx_time
-  minimum_pause = DUTY_CYCLE_WINDOW * (DUTY_CYCLE_LIMIT_PERCENT / 100.0) - tx_time;
-  if (minimum_pause < 0) minimum_pause = 0; // Ensure non-negative pause
+  // Accumulate the transmission time
+  totalTxTime += tx_time;
+
+  // Ensure the accumulated time does not exceed 10 seconds (10% of 100 seconds)
+  if (totalTxTime >= (DUTY_CYCLE_LIMIT_PERCENT / 100.0) * DUTY_CYCLE_WINDOW) {
+    // Calculate the pause required to stay within the duty cycle
+    minimum_pause = DUTY_CYCLE_WINDOW - (millis() - last_tx);
+  } else {
+    minimum_pause = 0;  // No pause needed if we haven't reached the limit
+  }
+
+  if (minimum_pause < 0) minimum_pause = 0;  // Ensure non-negative pause
+
+  // Debug output
+  Serial.printf("Transmission time: %llu ms, TotalTxTime: %llu ms, Calculated pause: %llu ms\n", 
+                tx_time, totalTxTime, minimum_pause);
 }
+
 
 void setupLora() {
   heltec_setup();  // Initialize Heltec board, display, and other components if display is enabled
@@ -110,6 +121,8 @@ uint32_t currentNodeId = 0;
 
 // Global variable to manage LoRa delay after WiFi transmission
 unsigned long loRaTransmitDelay = 0;  // This stores the time after which LoRa can transmit
+
+const size_t MAX_TRANSMISSIONS = 100;
 
 // Global message counter for generating unique message IDs
 unsigned long messageCounter = 0;
@@ -207,20 +220,25 @@ void transmitViaWiFi(const String& message) {
   Serial.printf("[WiFi Tx] Message transmitted via WiFi: %s\n", message.c_str());
 }
 
-// Function to check and enforce duty cycle (for LoRa only)
 bool isDutyCycleAllowed() {
-  if (bypassDutyCycle) {
-    dutyCycleActive = false;
-    return true;
+  // If duty cycle bypass is enabled, skip all checks (for testing)
+  if (bypassDutyCycle) return true;
+
+  // Reset the window if more than 100 seconds have passed
+  if (millis() - last_tx >= DUTY_CYCLE_WINDOW) {
+    Serial.println("Resetting duty cycle window.");
+    totalTxTime = 0;  // Reset accumulated transmission time
+    last_tx = millis();  // Start a new 100-second window
   }
 
-  if (millis() > last_tx + minimum_pause) {
-    dutyCycleActive = false;  // Duty cycle is over, we can transmit
-  } else {
-    dutyCycleActive = true;  // Duty cycle is still active
+  // Check if we are allowed to transmit based on total accumulated time
+  if (totalTxTime >= (DUTY_CYCLE_LIMIT_PERCENT / 100.0) * DUTY_CYCLE_WINDOW) {
+    dutyCycleActive = true;  // Duty cycle limit reached, can't transmit
+    return false;
   }
 
-  return !dutyCycleActive;
+  dutyCycleActive = false;
+  return true;
 }
 
 // Declare a global variable to store the last valid transmission time
@@ -257,60 +275,61 @@ void updateDisplay(long txTimeMillis = -1) {
   display.display();
 }
 
-// **Modified Function: Transmit with Duty Cycle**
-// Now, after a successful LoRa transmission, it will trigger WiFi retransmission
+void addTransmissionStatus(const String& messageID, const TransmissionStatus& status) {
+  if (messageTransmissions.size() >= MAX_TRANSMISSIONS) {
+    // Remove the first (oldest) entry
+    auto it = messageTransmissions.begin();
+    if (it != messageTransmissions.end()) {
+      messageTransmissions.erase(it);
+    }
+  }
+  messageTransmissions[messageID] = status;
+}
+
 void transmitWithDutyCycle(const String& message) {
-  // Check if the LoRa delay has passed
   if (millis() < loRaTransmitDelay) {
     Serial.println("[LoRa Tx] LoRa delay not expired, waiting...");
-    return;  // Exit the function and wait for the delay to expire
-  }
-
-  // Extract the message ID from the message
-  int separatorIndex = message.indexOf('|');
-  if (separatorIndex == -1) {
-    Serial.println("[LoRa Tx] Invalid message format.");
     return;
   }
-  String messageID = message.substring(0, separatorIndex);
+
+  String messageID = message.substring(0, message.indexOf('|'));
 
   auto& status = messageTransmissions[messageID];
   if (status.transmittedViaLoRa) {
     Serial.println("[LoRa Tx] Skipping retransmission via LoRa.");
-    return;  // Message already retransmitted via LoRa, skip it
+    return;
   }
 
   if (isDutyCycleAllowed()) {
-    tx_time = millis();
+    tx_time = millis();  // Capture time before starting transmission
 
-    Serial.printf("[LoRa Tx] Preparing to transmit: %s\n", message.c_str()); // Added log
+    Serial.printf("[LoRa Tx] Preparing to transmit: %s\n", message.c_str());
 
-    heltec_led(50);  // Turn LED on (this will light up during LoRa transmission)
-    // Transmit the message
+    heltec_led(50);  // Turn LED on during LoRa transmission
     int transmitStatus = radio.transmit(message.c_str());
-    tx_time = millis() - tx_time;
-    heltec_led(0);  // Turn off LED after transmission is done
+    tx_time = millis() - tx_time;  // Calculate the transmission time
+    heltec_led(0);  // Turn off LED
 
     if (transmitStatus == RADIOLIB_ERR_NONE) {
-      Serial.printf("[LoRa Tx] Message transmitted successfully via LoRa (%i ms)\n", (int)tx_time);
-      Serial.printf("[LoRa Tx] Message transmitted via LoRa: %s\n", message.c_str());
+      Serial.printf("[LoRa Tx] Message transmitted successfully in %llu ms\n", tx_time);
+
       status.transmittedViaLoRa = true;  // Mark as retransmitted via LoRa
 
-      // Calculate the required pause to respect the 10% duty cycle
+      // Accumulate the total transmission time and calculate the pause
       calculateDutyCyclePause(tx_time);
       last_tx = millis();  // Record the time of the last transmission
 
       updateDisplay(tx_time);  // Update display with transmission time
 
-      // **Trigger WiFi retransmission after successful LoRa transmission**
+      // WiFi retransmission after LoRa
       transmitViaWiFi(message);
-
     } else {
-      Serial.printf("[LoRa Tx] Transmission via LoRa failed (%i)\n", transmitStatus);
+      Serial.printf("[LoRa Tx] Transmission failed, error code %i\n", transmitStatus);
     }
   } else {
-    Serial.printf("[LoRa Tx] Duty cycle limit reached, please wait %i sec.\n",
-                  (int)((minimum_pause - (millis() - last_tx)) / 1000) + 1);
+    // Inform the user that the duty cycle limit has been reached
+    uint64_t remainingTime = DUTY_CYCLE_WINDOW - (millis() - last_tx);
+    Serial.printf("[LoRa Tx] Duty cycle limit reached. Please wait %llu seconds.\n", remainingTime / 1000);
   }
 }
 
@@ -632,56 +651,63 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
     return date.toLocaleTimeString();  // Adjust the format as needed (for example, add date if necessary)
   }
 
-  // Function to send a message via the form
-  function sendMessage(event) {
-    event.preventDefault();
+function sendMessage(event) {
+  event.preventDefault();
 
-    const nameInput = document.getElementById('nameInput');
-    const messageInput = document.getElementById('messageInput');
-    const sendButton = document.getElementById('sendButton'); // Get the send button
+  const nameInput = document.getElementById('nameInput');
+  const messageInput = document.getElementById('messageInput');
+  const sendButton = document.getElementById('sendButton'); // Get the send button
 
-    const sender = nameInput.value;
-    const msg = messageInput.value;
+  const sender = nameInput.value;
+  const msg = messageInput.value;
 
-    if (!sender || !msg) {
-      alert('Please enter both a name and a message.');
-      return;
-    }
-
-    localStorage.setItem('username', sender);
-
-    const formData = new URLSearchParams();
-    formData.append('sender', sender);
-    formData.append('msg', msg);
-
-    // Disable the send button and provide user feedback
-    sendButton.disabled = true;
-    sendButton.value = 'Sending...';
-
-    fetch('/update', {
-      method: 'POST',
-      body: formData
-    })
-    .then(response => {
-      if (!response.ok) throw new Error('Failed to send message');
-      messageInput.value = '';
-      fetchData();  // Fetch new messages
-
-      // Re-enable the send button after 5 seconds
-      setTimeout(() => {
-        sendButton.disabled = false;
-        sendButton.value = 'Send';
-      }, 5000);
-    })
-    .catch(error => {
-      console.error('Error sending message:', error);
-
-      // Re-enable the send button even if there's an error
-      sendButton.disabled = false;
-      sendButton.value = 'Send';
-      alert('Failed to send message. Please try again.');
-    });
+  if (!sender || !msg) {
+    alert('Please enter both a name and a message.');
+    return;
   }
+
+  localStorage.setItem('username', sender);
+
+  const formData = new URLSearchParams();
+  formData.append('sender', sender);
+  formData.append('msg', msg);
+
+  // Disable the send button and start countdown
+  sendButton.disabled = true;
+  let countdown = 10;
+  sendButton.value = `Wait ${countdown}s`;  // Initial text
+
+  // Countdown function
+  const countdownInterval = setInterval(() => {
+    countdown -= 1;
+    sendButton.value = `Wait ${countdown}s`;  // Update button text each second
+
+    if (countdown === 0) {
+      clearInterval(countdownInterval);  // Stop the countdown when it reaches 0
+      sendButton.disabled = false;
+      sendButton.value = 'Send';  // Restore the button text to "Send"
+    }
+  }, 1000);  // Run every 1 second (1000ms)
+
+  fetch('/update', {
+    method: 'POST',
+    body: formData
+  })
+  .then(response => {
+    if (!response.ok) throw new Error('Failed to send message');
+    messageInput.value = '';
+    fetchData();  // Fetch new messages
+  })
+  .catch(error => {
+    console.error('Error sending message:', error);
+
+    // Re-enable the send button immediately if there's an error
+    clearInterval(countdownInterval);  // Stop the countdown
+    sendButton.disabled = false;
+    sendButton.value = 'Send';  // Restore the button text to "Send"
+    alert('Failed to send message. Please try again.');
+  });
+}
 
   // Function to fetch messages and update the UI
   function fetchData() {
@@ -896,22 +922,27 @@ void setupServerRoutes() {
     serveHtml(request, nodesPageHtml);
   });
 
-  server.on("/messages", HTTP_GET, [](AsyncWebServerRequest* request) {
-    String json = "[";
-    bool first = true;
-    for (const auto& msg : messages) {
-      if (!first) json += ",";
-      // Add nodeId and messageID to the JSON object
-      json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"message\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\",\"messageID\":\"" + msg.messageID + "\"";
-      if (msg.source == "[LoRa]") {
-        json += ",\"rssi\":" + String(msg.rssi) + ",\"snr\":" + String(msg.snr, 2);
-      }
-      json += "}";
-      first = false;
+server.on("/messages", HTTP_GET, [](AsyncWebServerRequest* request) {
+  DynamicJsonDocument doc(1024);
+  JsonArray messagesArray = doc.createNestedArray("messages");
+
+  for (const auto& msg : messages) {
+    JsonObject msgObj = messagesArray.createNestedObject();
+    msgObj["nodeId"] = msg.nodeId;
+    msgObj["sender"] = msg.sender;
+    msgObj["message"] = msg.content;
+    msgObj["source"] = msg.source;
+    msgObj["messageID"] = msg.messageID;
+    if (msg.source == "[LoRa]") {
+      msgObj["rssi"] = msg.rssi;
+      msgObj["snr"] = msg.snr;
     }
-    json += "]";
-    request->send(200, "application/json", "{\"messages\":" + json + "}");
-  });
+  }
+
+  String output;
+  serializeJson(doc, output);
+  request->send(200, "application/json", output);
+});
 
   server.on("/deviceCount", HTTP_GET, [](AsyncWebServerRequest* request) {
     updateMeshData();
