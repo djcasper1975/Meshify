@@ -220,7 +220,7 @@ void scheduleLoRaTransmission(String message) {
     String updatedMessage = messageID + "|" + originatorID + "|" + newSenderID + "|" + messageContent;
 
     fullMessage = updatedMessage;
-    loRaTransmitDelay = millis() + random(3000, 10001); // Set delay between 3000ms and 10000ms
+    loRaTransmitDelay = millis() + random(2201, 5000); // Set delay between 3000ms and 10000ms
     Serial.printf("[LoRa Schedule] Message scheduled for LoRa transmission after %lu ms: %s\n", 
                 loRaTransmitDelay - millis(), updatedMessage.c_str());
 }
