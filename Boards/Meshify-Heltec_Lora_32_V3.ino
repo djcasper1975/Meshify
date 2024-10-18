@@ -155,7 +155,7 @@ std::map<String, LoRaNode> loraNodes;
 // **Function to clean up old LoRa nodes**
 void cleanupLoRaNodes() {
   uint64_t currentTime = millis();
-  const uint64_t timeout = 900000; // 15 minutes in milliseconds
+  const uint64_t timeout = 960000; // 16 minutes in milliseconds
 
   for(auto it = loraNodes.begin(); it != loraNodes.end(); ) {
     if(currentTime - it->second.lastSeen > timeout) {
@@ -540,13 +540,6 @@ void loop() {
   if (millis() - lastHeartbeatTime >= heartbeatInterval) {
     sendHeartbeat();
     lastHeartbeatTime = millis();
-  }
-
-  // Clean up old LoRa nodes every 16 minutes
-  static unsigned long lastCleanup = 0;
-  if (millis() - lastCleanup > 960000) { // 16 minutes
-    cleanupLoRaNodes();
-    lastCleanup = millis();
   }
 }
 
