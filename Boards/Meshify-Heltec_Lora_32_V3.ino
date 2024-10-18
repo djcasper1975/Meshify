@@ -748,155 +748,153 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       text-decoration: underline;
     }
   </style>
-  
-<script>
-  const messageTimestamps = {};  // Object to store timestamps for each message
 
-  // Function to format the timestamp for display
-  function formatTimestamp(timestamp) {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString();  // Adjust the format as needed (for example, add date if necessary)
-  }
+  <script>
+    const messageTimestamps = {};  // Object to store timestamps for each message
 
-  // Function to send a message via the form
-  function sendMessage(event) {
-    event.preventDefault();
-
-    const nameInput = document.getElementById('nameInput');
-    const messageInput = document.getElementById('messageInput');
-    const sendButton = document.getElementById('sendButton'); // Get the send button
-
-    const sender = nameInput.value;
-    const msg = messageInput.value;
-
-    if (!sender || !msg) {
-      alert('Please enter both a name and a message.');
-      return;
+    // Function to format the timestamp for display
+    function formatTimestamp(timestamp) {
+      const date = new Date(timestamp);
+      return date.toLocaleTimeString();  // Adjust the format as needed
     }
 
-    localStorage.setItem('username', sender);
+    // Function to send a message via the form
+    function sendMessage(event) {
+      event.preventDefault();
 
-    const formData = new URLSearchParams();
-    formData.append('sender', sender);
-    formData.append('msg', msg);
+      const nameInput = document.getElementById('nameInput');
+      const messageInput = document.getElementById('messageInput');
+      const sendButton = document.getElementById('sendButton'); // Get the send button
 
-    // Disable the send button and provide user feedback
-    sendButton.disabled = true;
-    sendButton.value = 'Wait 15s';
+      const sender = nameInput.value;  // The sender (your name)
+      const msg = messageInput.value;  // The message content
 
-    fetch('/update', {
-      method: 'POST',
-      body: formData
-    })
-    .then(response => {
-      if (!response.ok) throw new Error('Failed to send message');
-      messageInput.value = '';
-      fetchData();  // Fetch new messages
+      if (!sender || !msg) {
+        alert('Please enter both a name and a message.');
+        return;
+      }
 
-      // Re-enable the send button after 15 seconds
-      setTimeout(() => {
+      localStorage.setItem('username', sender);  // Save the username for future use
+
+      const formData = new URLSearchParams();
+      formData.append('sender', sender);  // Send the sender's name
+      formData.append('msg', msg);        // Send the message content
+
+      // Disable the send button for 15 seconds to prevent spam
+      sendButton.disabled = true;
+      sendButton.value = 'Wait 15s';
+
+      fetch('/update', {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => {
+        if (!response.ok) throw new Error('Failed to send message');
+        messageInput.value = '';  // Clear the input field after sending
+        fetchData();  // Fetch new messages to update the UI
+
+        // Re-enable the send button after 15 seconds
+        setTimeout(() => {
+          sendButton.disabled = false;
+          sendButton.value = 'Send';
+        }, 15000);
+      })
+      .catch(error => {
+        console.error('Error sending message:', error);
         sendButton.disabled = false;
         sendButton.value = 'Send';
-      }, 15000);
-    })
-    .catch(error => {
-      console.error('Error sending message:', error);
-
-      // Re-enable the send button even if there's an error
-      sendButton.disabled = false;
-      sendButton.value = 'Send';
-      alert('Failed to send message. Please try again.');
-    });
-  }
-
-  // Function to fetch messages and update the UI
-  function fetchData() {
-    fetch('/messages')
-      .then(response => response.json())
-      .then(data => {
-        const ul = document.getElementById('messageList');
-        ul.innerHTML = '';  // Clear the list before appending new messages
-
-        const currentNodeId = localStorage.getItem('nodeId');
-
-data.messages.forEach(msg => {
-  const li = document.createElement('li');
-  li.classList.add('message');
-
-  // Determine whether the message is sent or received
-  const isSentByCurrentNode = msg.nodeId === currentNodeId;
-  if (isSentByCurrentNode) {
-    li.classList.add('sent');
-  } else {
-    li.classList.add('received');
-    if (msg.source === '[LoRa]') {
-      li.classList.add('lora');
-    } else {
-      li.classList.add('wifi');
-    }
-  }
-
-  // Store the timestamp when the message is received, if it doesn't already exist
-  if (!messageTimestamps[msg.messageID]) {
-    messageTimestamps[msg.messageID] = Date.now();  // Set the timestamp when the message is first received
-  }
-
-  // Format the timestamp for display
-  const timestamp = formatTimestamp(messageTimestamps[msg.messageID]);
-
-  // **Update nodeId display logic: Always display "Node: " followed by node ID**
-  let nodeIdHtml = `Node Id: ${msg.nodeId}`;  // Always show "Node: " before the node ID
-
-  // Display RSSI and SNR if available and source is LoRa
-  let rssiSnrHtml = '';
-  if (msg.source === '[LoRa]' && typeof msg.rssi !== 'undefined' && typeof msg.snr !== 'undefined') {
-    rssiSnrHtml = `<span class="message-rssi-snr">RSSI: ${msg.rssi} dBm, SNR: ${msg.snr} dB</span>`;
-  }
-
-  // Insert the message, displaying NodeId for both sent and received messages
-  li.innerHTML = `
-    <span class="message-nodeid">${nodeIdHtml}</span>  <!-- Always display NodeId -->
-    <div class="message-content">${msg.content}</div>  <!-- Show message content -->
-    <span class="message-time">${timestamp}</span>  <!-- Show time of the message -->
-    ${rssiSnrHtml}  <!-- Show RSSI and SNR if available -->
-  `;
-  ul.appendChild(li);
-});
-
-
-        // Scroll to the bottom of the message list to show the most recent message
-        ul.scrollTop = ul.scrollHeight;
-      })
-      .catch(error => console.error('Error fetching messages:', error));
-
-    fetch('/deviceCount')
-      .then(response => response.json())
-      .then(data => {
-        localStorage.setItem('nodeId', data.nodeId);
-        document.getElementById('deviceCount').innerHTML = 
-          'Mesh Nodes: <a href="/nodes">' + data.totalCount + '</a>, Node ID: ' + data.nodeId;
-      })
-      .catch(error => console.error('Error fetching device count:', error));
-  }
-
-  // Event listener for when the page is loaded
-  window.onload = function() {
-    const savedName = localStorage.getItem('username');
-    if (savedName) {
-      document.getElementById('nameInput').value = savedName;
+        alert('Failed to send message. Please try again.');
+      });
     }
 
-    fetchData();  // Fetch the initial set of messages
-    setInterval(fetchData, 5000);  // Fetch messages every 5 seconds
-    document.getElementById('messageForm').addEventListener('submit', sendMessage);
-  };
-</script>
+    // Function to fetch messages and update the UI
+    function fetchData() {
+      fetch('/messages')
+        .then(response => response.json())
+        .then(data => {
+          const ul = document.getElementById('messageList');
+          ul.innerHTML = '';  // Clear the list before appending new messages
+
+          const currentNodeId = localStorage.getItem('nodeId');  // Get the current node ID
+
+          data.messages.forEach(msg => {
+            const li = document.createElement('li');
+            li.classList.add('message');
+
+            // Determine whether the message is sent by the current user (based on node ID)
+            const isSentByCurrentNode = msg.nodeId === currentNodeId;
+            if (isSentByCurrentNode) {
+              li.classList.add('sent');
+            } else {
+              li.classList.add('received');
+              if (msg.source === '[LoRa]') {
+                li.classList.add('lora');
+              } else {
+                li.classList.add('wifi');
+              }
+            }
+
+            // Store the timestamp when the message is received, if it doesn't already exist
+            if (!messageTimestamps[msg.messageID]) {
+              messageTimestamps[msg.messageID] = Date.now();  // Set the timestamp when the message is first received
+            }
+
+            // Format the timestamp for display
+            const timestamp = formatTimestamp(messageTimestamps[msg.messageID]);
+
+            // Display node ID and sender's name (for both sent and received messages)
+            const nodeIdHtml = `Node Id: ${msg.nodeId}`;  // Always show the node ID
+            const senderHtml = `<strong>${msg.sender || 'Unknown'}:</strong> `;  // Show sender name (or 'Unknown' if missing)
+
+            // Display RSSI and SNR if available (for LoRa messages)
+            let rssiSnrHtml = '';
+            if (msg.source === '[LoRa]' && msg.rssi !== undefined && msg.snr !== undefined) {
+              rssiSnrHtml = `<span class="message-rssi-snr">RSSI: ${msg.rssi} dBm, SNR: ${msg.snr} dB</span>`;
+            }
+
+            // Insert the message into the HTML
+            li.innerHTML = `
+              <span class="message-nodeid">${nodeIdHtml}</span>  <!-- Display node ID -->
+              <div class="message-content">${senderHtml}${msg.content}</div>  <!-- Display sender name and message content -->
+              <span class="message-time">${timestamp}</span>  <!-- Display message time -->
+              ${rssiSnrHtml}  <!-- Display RSSI and SNR if available -->
+            `;
+
+            ul.appendChild(li);  // Append the message to the list
+          });
+
+          // Scroll to the bottom of the message list to show the most recent message
+          ul.scrollTop = ul.scrollHeight;
+        })
+        .catch(error => console.error('Error fetching messages:', error));
+
+      // Fetch the current device count and node ID
+      fetch('/deviceCount')
+        .then(response => response.json())
+        .then(data => {
+          localStorage.setItem('nodeId', data.nodeId);  // Store the node ID locally
+          document.getElementById('deviceCount').innerHTML = 
+            `Mesh Nodes: <a href="/nodes">${data.totalCount}</a>, Node ID: ${data.nodeId}`;
+        })
+        .catch(error => console.error('Error fetching device count:', error));
+    }
+
+    // Event listener for when the page is loaded
+    window.onload = function() {
+      const savedName = localStorage.getItem('username');
+      if (savedName) {
+        document.getElementById('nameInput').value = savedName;
+      }
+
+      fetchData();  // Fetch the initial set of messages
+      setInterval(fetchData, 5000);  // Fetch messages every 5 seconds
+      document.getElementById('messageForm').addEventListener('submit', sendMessage);
+    };
+  </script>
 </head>
 <body>
-  <!-- Warning message at the top -->
   <div class="warning">For your safety, do not share your location or any personal information!</div>
   
-  <!-- Title below warning -->
   <h2>Meshify Chat</h2>
   
   <div id="deviceCount">Mesh Nodes: 0</div>
@@ -905,11 +903,11 @@ data.messages.forEach(msg => {
     <ul id="messageList"></ul>
   </div>
   
-<form id="messageForm">
-  <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required>
-  <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="100" required>
-  <input type="submit" id="sendButton" value="Send"> <!-- Added id="sendButton" -->
-</form>
+  <form id="messageForm">
+    <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required>
+    <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="100" required>
+    <input type="submit" id="sendButton" value="Send">
+  </form>
 </body>
 </html>
 )rawliteral";
