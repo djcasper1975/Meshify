@@ -370,10 +370,13 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
             const nodeIdHtml = (msg.nodeId !== currentNodeId) ? 
               `<span class="message-nodeid">Node: ${msg.nodeId}</span>` : '';
 
+            // **Show sender's name for both sent and received messages**
+            const senderHtml = `<strong>${msg.sender || 'Unknown'}:</strong> `;
+
             // Insert the message and timestamp into the UI
             li.innerHTML = `
               ${nodeIdHtml}
-              <div class="message-content">${msg.sender}: ${msg.message}</div>
+              <div class="message-content">${senderHtml}${msg.message}</div>
               <span class="message-time">${timestamp}</span>
             `;
             ul.appendChild(li);
@@ -428,7 +431,6 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
-
 
 const char nodesPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
