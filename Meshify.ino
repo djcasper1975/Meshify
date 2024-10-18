@@ -12,7 +12,7 @@
 #define MESH_SSID "Meshify 1.0"
 #define MESH_PASSWORD ""
 #define MESH_PORT 5555
-const int maxMessages = 10;
+const int maxMessages = 50;
 
 // Mesh and Web Server Setup
 AsyncWebServer server(80);
