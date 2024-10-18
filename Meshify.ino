@@ -1,4 +1,4 @@
-//Make sure you install the same version on all devices.
+//Make sure you install the same version on all devices. ESP32 
 #include <painlessMesh.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
@@ -26,6 +26,7 @@ struct Message {
   String content;
   String source;    // Indicates message source (WiFi or LoRa)
   String messageID; // Unique message ID
+  String relayID;   // Node that last relayed the message
 };
 
 // Rolling list for messages
@@ -52,13 +53,13 @@ String generateMessageID() {
   return String(getNodeId()) + ":" + String(messageCounter); // Format: nodeId:counter
 }
 
-// Function to construct a message with the message ID included
-String constructMessage(const String& messageID, const String& sender, const String& content) {
-  return messageID + "|" + sender + "|" + content; // New format
+// Updated function to construct a message with the message ID included
+String constructMessage(const String& messageID, const String& originatorID, const String& sender, const String& content, const String& relayID) {
+  return messageID + "|" + originatorID + "|" + sender + "|" + content + "|" + relayID;
 }
 
 // Function to add a message with a unique ID and size limit
-void addMessage(const String& nodeId, const String& messageID, const String& sender, String content, const String& source) {
+void addMessage(const String& nodeId, const String& messageID, const String& sender, String content, const String& source, const String& relayID) {
   const int maxMessageLength = 100;
 
   // Truncate the message if it exceeds the maximum allowed length
@@ -83,7 +84,7 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
   }
 
   // Create the new message
-  Message newMessage = {nodeId, sender, content, finalSource, messageID};
+  Message newMessage = {nodeId, sender, content, finalSource, messageID, relayID};
 
   // Insert the new message at the beginning of the list
   messages.insert(messages.begin(), newMessage);
@@ -97,8 +98,8 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
   }
 
   // Log the message
-  Serial.printf("Message added: NodeID: %s, Sender: %s, Content: %s, Source: %s, MessageID: %s\n",
-                nodeId.c_str(), sender.c_str(), content.c_str(), finalSource.c_str(), messageID.c_str());
+  Serial.printf("Message added: NodeID: %s, Sender: %s, Content: %s, Source: %s, MessageID: %s, RelayID: %s\n",
+                nodeId.c_str(), sender.c_str(), content.c_str(), finalSource.c_str(), messageID.c_str(), relayID.c_str());
 }
 
 // Function to send message via WiFi (Meshify)
@@ -127,47 +128,31 @@ void transmitViaWiFi(const String& message) {
 void receivedCallback(uint32_t from, String &message) {
   Serial.printf("Received message from %u: %s\n", from, message.c_str());
 
-  // Parse the message based on the new format: messageID|sender|content
+  // Parse the message based on the new format: messageID|originatorID|sender|content|relayID
   int firstSeparator = message.indexOf('|');
   int secondSeparator = message.indexOf('|', firstSeparator + 1);
+  int thirdSeparator = message.indexOf('|', secondSeparator + 1);
+  int fourthSeparator = message.indexOf('|', thirdSeparator + 1);
 
-  if (firstSeparator == -1 || secondSeparator == -1) {
+  if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
     Serial.println("[WiFi Rx] Invalid message format.");
     return;
   }
 
   String messageID = message.substring(0, firstSeparator);
-  String sender = message.substring(firstSeparator + 1, secondSeparator);
-  String messageContent = message.substring(secondSeparator + 1);
-
-  // Validate messageID format
-  int colonIndex = messageID.indexOf(':');
-  if (colonIndex == -1) {
-    Serial.println("[WiFi Rx] Invalid messageID format.");
-    return;
-  }
-  String nodeId = messageID.substring(0, colonIndex);
-  String counterStr = messageID.substring(colonIndex + 1);
-  bool validCounter = true;
-  for (unsigned int i = 0; i < counterStr.length(); i++) {
-    if (!isDigit(counterStr[i])) {
-      validCounter = false;
-      break;
-    }
-  }
-  if (!validCounter || nodeId.length() == 0) {
-    Serial.println("[WiFi Rx] Invalid messageID content.");
-    return;
-  }
+  String originatorID = message.substring(firstSeparator + 1, secondSeparator);
+  String senderID = message.substring(secondSeparator + 1, thirdSeparator);
+  String messageContent = message.substring(thirdSeparator + 1, fourthSeparator);
+  String relayID = message.substring(fourthSeparator + 1);
 
   // Avoid processing and retransmitting messages from your own node
-  if (sender == String(getNodeId())) {
+  if (originatorID == String(getNodeId())) {
     Serial.println("[WiFi Rx] Received own message, ignoring...");
     return; // Skip the message if it's from yourself
   }
 
   // Add the message to the message list
-  addMessage(nodeId, messageID, sender, messageContent, "[WiFi]");
+  addMessage(originatorID, messageID, senderID, messageContent, "[WiFi]", relayID);
 
   // Retransmit the message via WiFi if not already done
   transmitViaWiFi(message);
@@ -543,6 +528,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 )rawliteral";
  // Ensure this is properly closed
 
+
 // Setup Function
 void setup() {
   Serial.begin(115200);
@@ -597,7 +583,7 @@ void setupServerRoutes() {
     for (const auto& msg : messages) {
       if (!first) json += ",";
       // Include all necessary fields in the JSON object
-      json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"message\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\",\"messageID\":\"" + msg.messageID + "\"}";
+      json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"message\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\",\"messageID\":\"" + msg.messageID + "\",\"relayID\":\"" + msg.relayID + "\"}";
       first = false;
     }
     json += "]";
@@ -639,14 +625,18 @@ void setupServerRoutes() {
     senderName.replace("<", "&lt;");
     senderName.replace(">", "&gt;");
 
-    // Generate a new message ID without passing parameters
+    // Generate a new message ID
     String messageID = generateMessageID();
 
-    // Construct the full message with the message ID
-    String constructedMessage = constructMessage(messageID, senderName, newMessage);
+    // Set originatorID and relayID to own node ID
+    String originatorID = String(getNodeId());
+    String relayID = String(getNodeId());
 
-    // Add the message with source "[WiFi]" since WiFi is being used
-    addMessage(String(getNodeId()), messageID, senderName, newMessage, "[WiFi]");
+    // Construct the full message with the message ID, originatorID, and relayID
+    String constructedMessage = constructMessage(messageID, originatorID, senderName, newMessage, relayID);
+
+    // Add the message with source "[WiFi]"
+    addMessage(originatorID, messageID, senderName, newMessage, "[WiFi]", relayID);
     transmitViaWiFi(constructedMessage); // Transmit via WiFi
 
     request->send(200); // Respond to indicate message was processed
