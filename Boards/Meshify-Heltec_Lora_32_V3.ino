@@ -1,4 +1,4 @@
-// THIS VERSION NOW HAS CRC CHECKING. ALL NODES MUST BE THIS SAME VERSION OF CODE.
+// THIS VERSION NOW HAS CRC CHECKING. ALL NODES MUST BE THIS SAME VERSION OF CODE!!
 #define HELTEC_POWER_BUTTON // Use the power button feature of Heltec
 #include <heltec_unofficial.h> // Heltec library for OLED and LoRa
 #include <painlessMesh.h>
