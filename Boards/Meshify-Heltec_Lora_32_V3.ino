@@ -1,4 +1,4 @@
-//Always update all your devices when updating.
+// THIS VERSION NOW HAS CRC CHECKING. ALL NODES MUST BE THIS SAME VERSION OF CODE.
 #define HELTEC_POWER_BUTTON // Use the power button feature of Heltec
 #include <heltec_unofficial.h> // Heltec library for OLED and LoRa
 #include <painlessMesh.h>
@@ -136,9 +136,30 @@ String generateMessageID(const String& nodeId) {
   return nodeId + ":" + String(messageCounter);
 }
 
-// Function to construct a unified message with originatorID and relayID
+// Function to compute CRC-16-CCITT
+uint16_t crc16_ccitt(const uint8_t *buf, size_t len) {
+  uint16_t crc = 0xFFFF;
+  for (size_t i = 0; i < len; i++) {
+    crc ^= (uint16_t)buf[i] << 8;
+    for (uint8_t j = 0; j < 8; j++) {
+      if (crc & 0x8000)
+        crc = (crc << 1) ^ 0x1021;
+      else
+        crc <<= 1;
+    }
+  }
+  return crc;
+}
+
+// Function to construct a unified message with originatorID, relayID, and CRC
 String constructMessage(const String& messageID, const String& originatorID, const String& sender, const String& content, const String& relayID) {
-  return messageID + "|" + originatorID + "|" + sender + "|" + content + "|" + relayID;
+  String messageWithoutCRC = messageID + "|" + originatorID + "|" + sender + "|" + content + "|" + relayID;
+  // Compute CRC over messageWithoutCRC
+  uint16_t crc = crc16_ccitt((const uint8_t *)messageWithoutCRC.c_str(), messageWithoutCRC.length());
+  char crcStr[5]; // 4 hex digits plus null terminator
+  sprintf(crcStr, "%04X", crc);
+  String fullMessage = messageWithoutCRC + "|" + String(crcStr);
+  return fullMessage;
 }
 
 // **New Data Structure for LoRa Nodes**
@@ -152,13 +173,15 @@ struct LoRaNode {
 // Container to hold all LoRa nodes
 std::map<String, LoRaNode> loraNodes;
 
-// **Function to clean up old LoRa nodes**
+unsigned long lastCleanupTime = 0;
+const unsigned long cleanupInterval = 60000; // 1 minute in milliseconds
+
 void cleanupLoRaNodes() {
   uint64_t currentTime = millis();
   const uint64_t timeout = 960000; // 16 minutes in milliseconds
 
-  for(auto it = loraNodes.begin(); it != loraNodes.end(); ) {
-    if(currentTime - it->second.lastSeen > timeout) {
+  for (auto it = loraNodes.begin(); it != loraNodes.end(); ) {
+    if (currentTime - it->second.lastSeen > timeout) {
       Serial.printf("[LoRa Nodes] Removing inactive LoRa node: %s\n", it->first.c_str());
       it = loraNodes.erase(it);
     } else {
@@ -203,20 +226,39 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
 
 // **New Function: Schedule LoRa Transmission**
 void scheduleLoRaTransmission(String message) {
-    int firstSeparator = message.indexOf('|');
-    int secondSeparator = message.indexOf('|', firstSeparator + 1);
-    int thirdSeparator = message.indexOf('|', secondSeparator + 1);
-    int fourthSeparator = message.indexOf('|', thirdSeparator + 1);
-
-    if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
-        Serial.println("[LoRa Tx] Invalid message format.");
+    // Extract and update relayID
+    int lastSeparator = message.lastIndexOf('|');
+    if (lastSeparator == -1) {
+        Serial.println("[LoRa Schedule] Invalid message format (no CRC).");
         return;
     }
 
-    String messageID = message.substring(0, firstSeparator);
-    String originatorID = message.substring(firstSeparator + 1, secondSeparator);
-    String senderID = message.substring(secondSeparator + 1, thirdSeparator);
-    String messageContent = message.substring(thirdSeparator + 1, fourthSeparator);
+    String crcStr = message.substring(lastSeparator + 1);
+    String messageWithoutCRC = message.substring(0, lastSeparator);
+
+    // Compute CRC over messageWithoutCRC
+    uint16_t receivedCRC = (uint16_t)strtol(crcStr.c_str(), NULL, 16);
+    uint16_t computedCRC = crc16_ccitt((const uint8_t *)messageWithoutCRC.c_str(), messageWithoutCRC.length());
+
+    if (receivedCRC != computedCRC) {
+        Serial.printf("[LoRa Schedule] CRC mismatch. Received: %04X, Computed: %04X\n", receivedCRC, computedCRC);
+        return;
+    }
+
+    int firstSeparator = messageWithoutCRC.indexOf('|');
+    int secondSeparator = messageWithoutCRC.indexOf('|', firstSeparator + 1);
+    int thirdSeparator = messageWithoutCRC.indexOf('|', secondSeparator + 1);
+    int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
+
+    if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
+        Serial.println("[LoRa Schedule] Invalid message format.");
+        return;
+    }
+
+    String messageID = messageWithoutCRC.substring(0, firstSeparator);
+    String originatorID = messageWithoutCRC.substring(firstSeparator + 1, secondSeparator);
+    String senderID = messageWithoutCRC.substring(secondSeparator + 1, thirdSeparator);
+    String messageContent = messageWithoutCRC.substring(thirdSeparator + 1, fourthSeparator);
     // We don't need the old relayID here
 
     // Update relayID
@@ -353,12 +395,17 @@ void transmitWithDutyCycle(const String& message) {
 
 // **Heartbeat Variables**
 unsigned long lastHeartbeatTime = 0;
-const unsigned long heartbeatInterval = 900000; // 15 minutes in milliseconds (restored to original)
+const unsigned long heartbeatInterval = 900000; // 15 minutes in milliseconds
 
 // Function to send heartbeat via LoRa
 void sendHeartbeat() {
   // Construct a heartbeat message
-  String heartbeatMessage = "HEARTBEAT|" + String(getNodeId());
+  String heartbeatWithoutCRC = "HEARTBEAT|" + String(getNodeId());
+  // Compute CRC
+  uint16_t crc = crc16_ccitt((const uint8_t *)heartbeatWithoutCRC.c_str(), heartbeatWithoutCRC.length());
+  char crcStr[5];
+  sprintf(crcStr, "%04X", crc);
+  String heartbeatMessage = heartbeatWithoutCRC + "|" + String(crcStr);
   
   // Transmit the heartbeat message via LoRa
   if (isDutyCycleAllowed()) {
@@ -426,95 +473,114 @@ void loop() {
     if (state == RADIOLIB_ERR_NONE) {
       Serial.printf("[LoRa Rx] Received message: %s\n", message.c_str());
 
-      if (message.startsWith("HEARTBEAT|")) {
-        // Process heartbeat message
-        String senderNodeId = message.substring(strlen("HEARTBEAT|"));
-        Serial.printf("[LoRa Rx] Received heartbeat from node: %s\n", senderNodeId.c_str());
-        // Get RSSI and SNR
-        int rssi = radio.getRSSI();
-        float snr = radio.getSNR();
-        // Update the lastSeen time and RSSI/SNR for the node
-        uint64_t currentTime = millis();
-
-        // **Avoid updating own node's entry**
-        if (senderNodeId != String(getNodeId())) {
-          if (loraNodes.find(senderNodeId) == loraNodes.end()) {
-            LoRaNode newNode = {senderNodeId, rssi, snr, currentTime};
-            loraNodes[senderNodeId] = newNode;
-            Serial.printf("[LoRa Nodes] New LoRa node added: %s (RSSI: %d, SNR: %.2f)\n", senderNodeId.c_str(), rssi, snr);
-          } else {
-            loraNodes[senderNodeId].lastRSSI = rssi;
-            loraNodes[senderNodeId].lastSNR = snr;
-            loraNodes[senderNodeId].lastSeen = currentTime;
-            Serial.printf("[LoRa Nodes] Updated LoRa node: %s (Heartbeat, RSSI: %d, SNR: %.2f)\n", senderNodeId.c_str(), rssi, snr);
-          }
-        } else {
-          Serial.println("[LoRa Rx] Received own heartbeat, ignoring...");
-        }
-        // Do not relay heartbeat
+      // Extract the CRC from the message
+      int lastSeparatorIndex = message.lastIndexOf('|');
+      if (lastSeparatorIndex == -1) {
+        Serial.println("[LoRa Rx] Invalid message format (no CRC).");
       } else {
-        // Process received message
-        int firstSeparator = message.indexOf('|');
-        int secondSeparator = message.indexOf('|', firstSeparator + 1);
-        int thirdSeparator = message.indexOf('|', secondSeparator + 1);
-        int fourthSeparator = message.indexOf('|', thirdSeparator + 1);
+        String crcStr = message.substring(lastSeparatorIndex + 1);
+        String messageWithoutCRC = message.substring(0, lastSeparatorIndex);
 
-        if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
-          Serial.println("[LoRa Rx] Invalid message format.");
+        // Compute CRC over messageWithoutCRC
+        uint16_t receivedCRC = (uint16_t)strtol(crcStr.c_str(), NULL, 16);
+        uint16_t computedCRC = crc16_ccitt((const uint8_t *)messageWithoutCRC.c_str(), messageWithoutCRC.length());
+
+        if (receivedCRC != computedCRC) {
+          Serial.printf("[LoRa Rx] CRC mismatch. Received: %04X, Computed: %04X\n", receivedCRC, computedCRC);
         } else {
-          String messageID = message.substring(0, firstSeparator);
-          String originatorID = message.substring(firstSeparator + 1, secondSeparator);
-          String senderID = message.substring(secondSeparator + 1, thirdSeparator);
-          String messageContent = message.substring(thirdSeparator + 1, fourthSeparator);
-          String relayID = message.substring(fourthSeparator + 1);
+          Serial.println("[LoRa Rx] CRC valid.");
 
-          int rssi = radio.getRSSI();
-          float snr = radio.getSNR();
+          if (messageWithoutCRC.startsWith("HEARTBEAT|")) {
+            // Process heartbeat message
+            String senderNodeId = messageWithoutCRC.substring(strlen("HEARTBEAT|"));
+            Serial.printf("[LoRa Rx] Received heartbeat from node: %s\n", senderNodeId.c_str());
+            // Get RSSI and SNR
+            int rssi = radio.getRSSI();
+            float snr = radio.getSNR();
+            // Update the lastSeen time and RSSI/SNR for the node
+            uint64_t currentTime = millis();
 
-          Serial.printf("[LoRa Rx] RSSI: %d dBm, SNR: %.2f dB\n", rssi, snr);
-
-          // **Check if originatorID is own node ID**
-          if (originatorID == String(getNodeId())) {
-            Serial.println("[LoRa Rx] Received own message, ignoring...");
-          } else {
-            auto& status = messageTransmissions[messageID];
-            if (status.transmittedViaWiFi && status.transmittedViaLoRa) {
-              Serial.println("[LoRa Rx] Message already retransmitted via both WiFi and LoRa, ignoring...");
+            // **Avoid updating own node's entry**
+            if (senderNodeId != String(getNodeId())) {
+              if (loraNodes.find(senderNodeId) == loraNodes.end()) {
+                LoRaNode newNode = {senderNodeId, rssi, snr, currentTime};
+                loraNodes[senderNodeId] = newNode;
+                Serial.printf("[LoRa Nodes] New LoRa node added: %s (RSSI: %d, SNR: %.2f)\n", senderNodeId.c_str(), rssi, snr);
+              } else {
+                loraNodes[senderNodeId].lastRSSI = rssi;
+                loraNodes[senderNodeId].lastSNR = snr;
+                loraNodes[senderNodeId].lastSeen = currentTime;
+                Serial.printf("[LoRa Nodes] Updated LoRa node: %s (Heartbeat, RSSI: %d, SNR: %.2f)\n", senderNodeId.c_str(), rssi, snr);
+              }
             } else {
-              addMessage(originatorID, messageID, senderID, messageContent, "[LoRa]", relayID, rssi, snr);
+              Serial.println("[LoRa Rx] Received own heartbeat, ignoring...");
+            }
+            // Do not relay heartbeat
+          } else {
+            // Process received message
+            int firstSeparator = messageWithoutCRC.indexOf('|');
+            int secondSeparator = messageWithoutCRC.indexOf('|', firstSeparator + 1);
+            int thirdSeparator = messageWithoutCRC.indexOf('|', secondSeparator + 1);
+            int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
 
-              if (!status.transmittedViaLoRa) {
-                scheduleLoRaTransmission(message);
-              }
+            if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
+              Serial.println("[LoRa Rx] Invalid message format.");
+            } else {
+              String messageID = messageWithoutCRC.substring(0, firstSeparator);
+              String originatorID = messageWithoutCRC.substring(firstSeparator + 1, secondSeparator);
+              String senderID = messageWithoutCRC.substring(secondSeparator + 1, thirdSeparator);
+              String messageContent = messageWithoutCRC.substring(thirdSeparator + 1, fourthSeparator);
+              String relayID = messageWithoutCRC.substring(fourthSeparator + 1);
 
-              uint64_t currentTime = millis();
+              int rssi = radio.getRSSI();
+              float snr = radio.getSNR();
 
-              // **Avoid updating own node's entry**
-              if (relayID != String(getNodeId())) {
-                // Update loraNodes using relayID
-                if (loraNodes.find(relayID) == loraNodes.end()) {
-                  LoRaNode newNode = {relayID, rssi, snr, currentTime};
-                  loraNodes[relayID] = newNode;
-                  Serial.printf("[LoRa Nodes] New node added: %s (RSSI: %d, SNR: %.2f)\n", relayID.c_str(), rssi, snr);
+              Serial.printf("[LoRa Rx] RSSI: %d dBm, SNR: %.2f dB\n", rssi, snr);
+
+              // **Check if originatorID is own node ID**
+              if (originatorID == String(getNodeId())) {
+                Serial.println("[LoRa Rx] Received own message, ignoring...");
+              } else {
+                auto& status = messageTransmissions[messageID];
+                if (status.transmittedViaWiFi && status.transmittedViaLoRa) {
+                  Serial.println("[LoRa Rx] Message already retransmitted via both WiFi and LoRa, ignoring...");
                 } else {
-                  loraNodes[relayID].lastRSSI = rssi;
-                  loraNodes[relayID].lastSNR = snr;
-                  loraNodes[relayID].lastSeen = currentTime;
-                  Serial.printf("[LoRa Nodes] Updated node: %s (RSSI: %d, SNR: %.2f)\n", relayID.c_str(), rssi, snr);
-                }
-              } else {
-                Serial.println("[LoRa Nodes] RelayID is own node ID, not updating loraNodes.");
-              }
+                  addMessage(originatorID, messageID, senderID, messageContent, "[LoRa]", relayID, rssi, snr);
 
-              // Ensure originatorID is in loraNodes, but do not update RSSI/SNR or lastSeen
-              if (originatorID != String(getNodeId())) {
-                if (loraNodes.find(originatorID) == loraNodes.end()) {
-                  LoRaNode newOriginatorNode = {originatorID, 0, 0.0, 0};
-                  loraNodes[originatorID] = newOriginatorNode;
-                  Serial.printf("[LoRa Nodes] New originator node added: %s\n", originatorID.c_str());
+                  if (!status.transmittedViaLoRa) {
+                    scheduleLoRaTransmission(message);
+                  }
+
+                  uint64_t currentTime = millis();
+
+                  // **Avoid updating own node's entry**
+                  if (relayID != String(getNodeId())) {
+                    // Update loraNodes using relayID
+                    if (loraNodes.find(relayID) == loraNodes.end()) {
+                      LoRaNode newNode = {relayID, rssi, snr, currentTime};
+                      loraNodes[relayID] = newNode;
+                      Serial.printf("[LoRa Nodes] New node added: %s (RSSI: %d, SNR: %.2f)\n", relayID.c_str(), rssi, snr);
+                    } else {
+                      loraNodes[relayID].lastRSSI = rssi;
+                      loraNodes[relayID].lastSNR = snr;
+                      loraNodes[relayID].lastSeen = currentTime;
+                      Serial.printf("[LoRa Nodes] Updated node: %s (RSSI: %d, SNR: %.2f)\n", relayID.c_str(), rssi, snr);
+                    }
+                  } else {
+                    Serial.println("[LoRa Nodes] RelayID is own node ID, not updating loraNodes.");
+                  }
+
+                  // Ensure originatorID is in loraNodes, but do not update RSSI/SNR or lastSeen
+                  if (originatorID != String(getNodeId())) {
+                    if (loraNodes.find(originatorID) == loraNodes.end()) {
+                      LoRaNode newOriginatorNode = {originatorID, 0, 0.0, 0};
+                      loraNodes[originatorID] = newOriginatorNode;
+                      Serial.printf("[LoRa Nodes] New originator node added: %s\n", originatorID.c_str());
+                    }
+                  } else {
+                    Serial.println("[LoRa Nodes] OriginatorID is own node ID, not adding to loraNodes.");
+                  }
                 }
-              } else {
-                Serial.println("[LoRa Nodes] OriginatorID is own node ID, not adding to loraNodes.");
               }
             }
           }
@@ -536,7 +602,13 @@ void loop() {
   updateDisplay();
   dnsServer.processNextRequest();
 
-  // Send heartbeat every 15 minutes (restored to original)
+    // **Add this block to periodically clean up old LoRa nodes**
+  if (millis() - lastCleanupTime >= cleanupInterval) {
+    cleanupLoRaNodes();
+    lastCleanupTime = millis();
+  }
+
+  // Send heartbeat every 15 minutes
   if (millis() - lastHeartbeatTime >= heartbeatInterval) {
     sendHeartbeat();
     lastHeartbeatTime = millis();
@@ -560,39 +632,59 @@ void initMesh() {
 void receivedCallback(uint32_t from, String& message) {
   Serial.printf("[WiFi Rx] Received message from %u: %s\n", from, message.c_str());
 
-  int firstSeparator = message.indexOf('|');
-  int secondSeparator = message.indexOf('|', firstSeparator + 1);
-  int thirdSeparator = message.indexOf('|', secondSeparator + 1);
-  int fourthSeparator = message.indexOf('|', thirdSeparator + 1);
-
-  if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
-    Serial.println("[WiFi Rx] Invalid message format.");
+  // Extract the CRC from the message
+  int lastSeparatorIndex = message.lastIndexOf('|');
+  if (lastSeparatorIndex == -1) {
+    Serial.println("[WiFi Rx] Invalid message format (no CRC).");
     return;
   }
+  String crcStr = message.substring(lastSeparatorIndex + 1);
+  String messageWithoutCRC = message.substring(0, lastSeparatorIndex);
 
-  String messageID = message.substring(0, firstSeparator);
-  String originatorID = message.substring(firstSeparator + 1, secondSeparator);
-  String senderID = message.substring(secondSeparator + 1, thirdSeparator);
-  String messageContent = message.substring(thirdSeparator + 1, fourthSeparator);
-  String relayID = message.substring(fourthSeparator + 1);
+  // Compute CRC over messageWithoutCRC
+  uint16_t receivedCRC = (uint16_t)strtol(crcStr.c_str(), NULL, 16);
+  uint16_t computedCRC = crc16_ccitt((const uint8_t *)messageWithoutCRC.c_str(), messageWithoutCRC.length());
 
-  if (originatorID == String(getNodeId())) {
-    Serial.println("[WiFi Rx] Received own message, processing for node list but not retransmitting...");
+  if (receivedCRC != computedCRC) {
+    Serial.printf("[WiFi Rx] CRC mismatch. Received: %04X, Computed: %04X\n", receivedCRC, computedCRC);
+    return;
+  } else {
+    Serial.println("[WiFi Rx] CRC valid.");
+
+    int firstSeparator = messageWithoutCRC.indexOf('|');
+    int secondSeparator = messageWithoutCRC.indexOf('|', firstSeparator + 1);
+    int thirdSeparator = messageWithoutCRC.indexOf('|', secondSeparator + 1);
+    int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
+
+    if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
+      Serial.println("[WiFi Rx] Invalid message format.");
+      return;
+    }
+
+    String messageID = messageWithoutCRC.substring(0, firstSeparator);
+    String originatorID = messageWithoutCRC.substring(firstSeparator + 1, secondSeparator);
+    String senderID = messageWithoutCRC.substring(secondSeparator + 1, thirdSeparator);
+    String messageContent = messageWithoutCRC.substring(thirdSeparator + 1, fourthSeparator);
+    String relayID = messageWithoutCRC.substring(fourthSeparator + 1);
+
+    if (originatorID == String(getNodeId())) {
+      Serial.println("[WiFi Rx] Received own message, processing for node list but not retransmitting...");
+      addMessage(originatorID, messageID, senderID, messageContent, "[WiFi]", relayID);
+      return;
+    }
+
+    auto& status = messageTransmissions[messageID];
+    if (status.transmittedViaWiFi && status.transmittedViaLoRa) {
+      Serial.println("[WiFi Rx] Message already retransmitted via both WiFi and LoRa, ignoring...");
+      return;
+    }
+
+    Serial.printf("[WiFi Rx] Adding message: %s\n", message.c_str());
     addMessage(originatorID, messageID, senderID, messageContent, "[WiFi]", relayID);
-    return;
-  }
 
-  auto& status = messageTransmissions[messageID];
-  if (status.transmittedViaWiFi && status.transmittedViaLoRa) {
-    Serial.println("[WiFi Rx] Message already retransmitted via both WiFi and LoRa, ignoring...");
-    return;
-  }
-
-  Serial.printf("[WiFi Rx] Adding message: %s\n", message.c_str());
-  addMessage(originatorID, messageID, senderID, messageContent, "[WiFi]", relayID);
-
-  if (!status.transmittedViaLoRa) {
-    scheduleLoRaTransmission(message);
+    if (!status.transmittedViaLoRa) {
+      scheduleLoRaTransmission(message);
+    }
   }
 }
 
