@@ -1,5 +1,4 @@
-//NOT WORKING WITH NEW LORA UPDATE YET.
-//Make sure you install the same version on all devices. ESP32 
+//ALWAYS USE THE SAME CODE ON ALL DEVICES OTHERWISE STRANGE THINGS WILL HAPPEN!! 
 #include <painlessMesh.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
@@ -54,9 +53,38 @@ String generateMessageID() {
   return String(getNodeId()) + ":" + String(messageCounter); // Format: nodeId:counter
 }
 
-// Updated function to construct a message with the message ID included
+// Function to compute CRC-16-CCITT
+uint16_t crc16_ccitt(const uint8_t *buf, size_t len) {
+  uint16_t crc = 0xFFFF;
+  for (size_t i = 0; i < len; i++) {
+    crc ^= (uint16_t)buf[i] << 8;
+    for (uint8_t j = 0; j < 8; j++) {
+      if (crc & 0x8000)
+        crc = (crc << 1) ^ 0x1021;
+      else
+        crc <<= 1;
+    }
+  }
+  return crc;
+}
+
+// Function to calculate CRC16
+String calculateCRC(const String &message) {
+    uint16_t crc = crc16_ccitt((const uint8_t*)message.c_str(), message.length());
+    // Convert CRC to a 4-character hexadecimal string, padded with zeros if necessary
+    String crcStr = String(crc, HEX);
+    while (crcStr.length() < 4) {
+      crcStr = "0" + crcStr;
+    }
+    crcStr.toUpperCase();
+    return crcStr;
+}
+
+// Updated function to construct a message with the message ID included and CRC
 String constructMessage(const String& messageID, const String& originatorID, const String& sender, const String& content, const String& relayID) {
-  return messageID + "|" + originatorID + "|" + sender + "|" + content + "|" + relayID;
+  String messageWithoutCRC = messageID + "|" + originatorID + "|" + sender + "|" + content + "|" + relayID;
+  String crc = calculateCRC(messageWithoutCRC);
+  return messageWithoutCRC + "|" + crc; // Append CRC to the message
 }
 
 // Function to add a message with a unique ID and size limit
@@ -125,17 +153,18 @@ void transmitViaWiFi(const String& message) {
   Serial.printf("[WiFi Tx] Message transmitted via WiFi: %s\n", message.c_str());
 }
 
-// Function to handle incoming messages
+// Function to handle incoming messages with CRC verification
 void receivedCallback(uint32_t from, String &message) {
   Serial.printf("Received message from %u: %s\n", from, message.c_str());
 
-  // Parse the message based on the new format: messageID|originatorID|sender|content|relayID
+  // Parse the message to separate content and CRC
   int firstSeparator = message.indexOf('|');
   int secondSeparator = message.indexOf('|', firstSeparator + 1);
   int thirdSeparator = message.indexOf('|', secondSeparator + 1);
   int fourthSeparator = message.indexOf('|', thirdSeparator + 1);
+  int fifthSeparator = message.indexOf('|', fourthSeparator + 1);
 
-  if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
+  if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1 || fifthSeparator == -1) {
     Serial.println("[WiFi Rx] Invalid message format.");
     return;
   }
@@ -144,7 +173,22 @@ void receivedCallback(uint32_t from, String &message) {
   String originatorID = message.substring(firstSeparator + 1, secondSeparator);
   String senderID = message.substring(secondSeparator + 1, thirdSeparator);
   String messageContent = message.substring(thirdSeparator + 1, fourthSeparator);
-  String relayID = message.substring(fourthSeparator + 1);
+  String relayID = message.substring(fourthSeparator + 1, fifthSeparator);
+  String receivedCRC = message.substring(fifthSeparator + 1);
+
+  // Reconstruct the message without the CRC for validation
+  String messageWithoutCRC = messageID + "|" + originatorID + "|" + senderID + "|" + messageContent + "|" + relayID;
+
+  // Calculate the CRC for validation
+  String calculatedCRC = calculateCRC(messageWithoutCRC);
+
+  // Compare the received CRC with the calculated CRC
+  if (calculatedCRC != receivedCRC) {
+    Serial.println("[WiFi Rx] CRC mismatch. Message corrupted.");
+    return; // CRC doesn't match, discard the message
+  }
+
+  Serial.println("[WiFi Rx] CRC check passed. Message valid.");
 
   // Avoid processing and retransmitting messages from your own node
   if (originatorID == String(getNodeId())) {
@@ -529,8 +573,6 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
- // Ensure this is properly closed
-
 
 // Setup Function
 void setup() {
