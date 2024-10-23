@@ -1,3 +1,4 @@
+//NOT WORKING WITH NEW LORA UPDATE YET.
 //Make sure you install the same version on all devices. ESP32 
 #include <painlessMesh.h>
 #include <WiFi.h>
