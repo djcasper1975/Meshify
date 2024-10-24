@@ -1,5 +1,12 @@
 //23-10-2024
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
+//
+// M    M  EEEEE  SSSSS  H   H  I  FFFF Y   Y
+// MM  MM  E      S      H   H  I  F     Y Y 
+// M MM M  EEEE   SSSSS  HHHHH  I  FFFF   Y  
+// M    M  E          S  H   H  I  F      Y  
+// M    M  EEEEE  SSSSS  H   H  I  F      Y  
+//
 #define HELTEC_POWER_BUTTON // Use the power button feature of Heltec
 #include <heltec_unofficial.h> // Heltec library for OLED and LoRa
 #include <painlessMesh.h>
