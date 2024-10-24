@@ -97,7 +97,7 @@ String constructMessage(const String& messageID, const String& originatorID, con
 
 // Function to add a message with a unique ID and size limit
 void addMessage(const String& nodeId, const String& messageID, const String& sender, String content, const String& source, const String& relayID) {
-  const int maxMessageLength = 100;
+  const int maxMessageLength = 150;
 
   // Truncate the message if it exceeds the maximum allowed length
   if (content.length() > maxMessageLength) {
@@ -478,7 +478,7 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
   
 <form id="messageForm">
   <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required>
-  <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="100" required>
+  <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="150" required>
   <input type="submit" value="Send">
 </form>
 </body>
