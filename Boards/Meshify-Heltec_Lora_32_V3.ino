@@ -2,6 +2,7 @@
 //14-12-2024  added days weeks months to messages instead of just seconds hours..
 //Added Carousel showing messages
 //Removed duplicate startup calls.
+//added node history
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
 ////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  I  FFFF Y   Y //
@@ -158,14 +159,26 @@ String constructMessage(const String& messageID, const String& originatorID, con
   return fullMessage;
 }
 
+// *** METRICS HISTORY CHANGES ***
+// Store multiple samples for each node to track signal history (RSSI, SNR, timestamp).
+struct NodeMetricsSample {
+  uint64_t timestamp;
+  int rssi;
+  float snr;
+};
+
 struct LoRaNode {
   String nodeId;
   int lastRSSI;
   float lastSNR;
   uint64_t lastSeen;
+
+  // Rolling history of signal metrics (RSSI, SNR, timestamp).
+  std::vector<NodeMetricsSample> history; 
 };
 
 std::map<String, LoRaNode> loraNodes;
+// *** END METRICS HISTORY CHANGES ***
 
 unsigned long lastCleanupTime = 0;
 const unsigned long cleanupInterval = 60000; // 1 minute
@@ -304,9 +317,6 @@ const unsigned long carouselInterval = 3000; // 3 seconds each screen
 int carouselIndex = 0;
 long lastTxTimeMillis = -1; // store last LoRa Tx time for the display
 
-// ----------------------------------------------------------------------------
-// Single-block horizontal scroll for the entire ASCII logo at once
-// ----------------------------------------------------------------------------
 void drawMonospacedLine(int16_t x, int16_t y, const String &line, int charWidth = 7) {
   for (uint16_t i = 0; i < line.length(); i++) {
     display.drawString(x + i * charWidth, y, String(line[i]));
@@ -317,7 +327,6 @@ void showScrollingMonospacedAsciiArt() {
   display.clear();
   display.setFont(ArialMT_Plain_10);
 
-  // ASCII lines
   String lines[5];
   lines[0] = "M    M  EEEEE  SSSSS  H   H  I  FFFF Y   Y";
   lines[1] = "MM  MM  E      S      H   H  I  F     Y Y ";
@@ -327,23 +336,19 @@ void showScrollingMonospacedAsciiArt() {
 
   const int screenWidth  = 128;
   const int screenHeight = 64;
-  const int lineHeight   = 10;            // For ArialMT_Plain_10
-  const int totalBlockHeight = 5 * lineHeight;  // 5 lines = 50 px tall
-  int verticalOffset = (screenHeight - totalBlockHeight) / 2; // center vertically
+  const int lineHeight   = 10;
+  const int totalBlockHeight = 5 * lineHeight;
+  int verticalOffset = (screenHeight - totalBlockHeight) / 2;
 
-  // Emulated monospacing cell width
-  int charWidth = 7;  // Adjust if letters overlap or are too spaced
-
-  // Find max line length in characters
+  int charWidth = 7;
   uint16_t maxChars = 0;
   for (int i = 0; i < 5; i++) {
     if (lines[i].length() > maxChars) {
       maxChars = lines[i].length();
     }
   }
-  int totalBlockWidth = maxChars * charWidth; // total horizontal px of ASCII block
+  int totalBlockWidth = maxChars * charWidth;
 
-  // If block narrower than screen, just draw it once
   if (totalBlockWidth <= screenWidth) {
     int offsetX = (screenWidth - totalBlockWidth) / 2;
     for (int i = 0; i < 5; i++) {
@@ -354,26 +359,19 @@ void showScrollingMonospacedAsciiArt() {
     return;
   }
 
-  // Blank space at the start (before ASCII arrives) and at the end (after ASCII leaves)
   const int blankStart = 20; 
   const int blankEnd   = 20; 
 
-  // We'll scroll from offset = -blankStart (so it's off-screen to the right by 'blankStart' px)
-  // up to offset = totalBlockWidth + screenWidth + blankEnd (so it fully scrolls off left + extra blank).
   for (int offset = -blankStart; offset <= (totalBlockWidth + screenWidth + blankEnd); offset += 2) {
     display.clear();
     for (int i = 0; i < 5; i++) {
       drawMonospacedLine(-offset, verticalOffset + i * lineHeight, lines[i], charWidth);
     }
     display.display();
-    delay(30);  // Scroll speed
+    delay(30);
   }
-
 }
 
-// ----------------------------------------------------------------------------
-// drawMainScreen() - original main screen
-// ----------------------------------------------------------------------------
 void drawMainScreen(long txTimeMillis = -1) {
   if (txTimeMillis >= 0) {
     lastTxTimeMillis = txTimeMillis;
@@ -407,16 +405,12 @@ void drawMainScreen(long txTimeMillis = -1) {
   display.display();
 }
 
-// ----------------------------------------------------------------------------
-// displayCarousel() - cycles among main screen (index=0) and each message
-// ----------------------------------------------------------------------------
 void displayCarousel() {
   unsigned long currentMillis = millis();
   if (currentMillis - lastCarouselChange >= carouselInterval) {
     lastCarouselChange = currentMillis;
     carouselIndex++;
 
-    // If no messages, only show the main screen
     if (messages.empty()) {
       carouselIndex = 0;
     } else {
@@ -500,9 +494,8 @@ void transmitWithDutyCycle(const String& message) {
   }
 }
 
-// Heartbeat
 unsigned long lastHeartbeatTime = 0;
-const unsigned long heartbeatInterval = 900000; // 15 minutes
+const unsigned long heartbeatInterval = 60000; // 1 minute
 
 void sendHeartbeat() {
   String heartbeatWithoutCRC = "HEARTBEAT|" + getCustomNodeId(getNodeId());
@@ -541,14 +534,12 @@ void setup() {
   Serial.println("Initializing LoRa radio...");
   heltec_led(0);
 
-  // Initialize display
   display.init();
   display.flipScreenVertically();
   display.clear();
   display.setFont(ArialMT_Plain_10);
   drawMainScreen();
 
-  // Show ASCII block scrolling
   showScrollingMonospacedAsciiArt(); 
 
   RADIOLIB_OR_HALT(radio.begin());
@@ -616,16 +607,20 @@ void loop() {
             uint64_t currentTime = millis();
 
             if (senderNodeId != getCustomNodeId(getNodeId())) {
-              if (loraNodes.find(senderNodeId) == loraNodes.end()) {
-                LoRaNode newNode = {senderNodeId, rssi, snr, currentTime};
-                loraNodes[senderNodeId] = newNode;
-                Serial.printf("[LoRa Nodes] New node: %s\n", senderNodeId.c_str());
-              } else {
-                loraNodes[senderNodeId].lastRSSI = rssi;
-                loraNodes[senderNodeId].lastSNR = snr;
-                loraNodes[senderNodeId].lastSeen = currentTime;
-                Serial.printf("[LoRa Nodes] Updated node: %s\n", senderNodeId.c_str());
+              // *** METRICS HISTORY CHANGES ***
+              LoRaNode& node = loraNodes[senderNodeId];
+              node.nodeId = senderNodeId;
+              node.lastRSSI = rssi;
+              node.lastSNR = snr;
+              node.lastSeen = currentTime;
+
+              NodeMetricsSample sample = {currentTime, rssi, snr};
+              node.history.push_back(sample);
+              if (node.history.size() > 50) {
+                node.history.erase(node.history.begin());
               }
+              // *** END METRICS HISTORY CHANGES ***
+              Serial.printf("[LoRa Nodes] Updated/Added node: %s (Heartbeat)\n", senderNodeId.c_str());
             } else {
               Serial.println("[LoRa Rx] Own heartbeat, ignore.");
             }
@@ -660,28 +655,41 @@ void loop() {
                   }
 
                   uint64_t currentTime = millis();
+                  // *** METRICS HISTORY CHANGES ***
+                  // Update LoRaNode for 'relayID'
                   if (relayID != getCustomNodeId(getNodeId())) {
-                    if (loraNodes.find(relayID) == loraNodes.end()) {
-                      LoRaNode newNode = {relayID, rssi, snr, currentTime};
-                      loraNodes[relayID] = newNode;
-                      Serial.printf("[LoRa Nodes] New node: %s\n", relayID.c_str());
-                    } else {
-                      loraNodes[relayID].lastRSSI = rssi;
-                      loraNodes[relayID].lastSNR = snr;
-                      loraNodes[relayID].lastSeen = currentTime;
-                      Serial.printf("[LoRa Nodes] Updated node: %s\n", relayID.c_str());
+                    LoRaNode& relayNode = loraNodes[relayID];
+                    relayNode.nodeId = relayID;
+                    relayNode.lastRSSI = rssi;
+                    relayNode.lastSNR = snr;
+                    relayNode.lastSeen = currentTime;
+
+                    NodeMetricsSample sample = {currentTime, rssi, snr};
+                    relayNode.history.push_back(sample);
+                    if (relayNode.history.size() > 50) {
+                      relayNode.history.erase(relayNode.history.begin());
                     }
+                    Serial.printf("[LoRa Nodes] Updated/Added node: %s\n", relayID.c_str());
                   } else {
                     Serial.println("[LoRa Nodes] RelayID is own node, not updating.");
                   }
 
+                  // Also store a zero-RSSI sample for the originator, if not ourselves
                   if (originatorID != getCustomNodeId(getNodeId())) {
-                    if (loraNodes.find(originatorID) == loraNodes.end()) {
-                      LoRaNode newOriginatorNode = {originatorID, 0, 0.0, 0};
-                      loraNodes[originatorID] = newOriginatorNode;
-                      Serial.printf("[LoRa Nodes] New originator: %s\n", originatorID.c_str());
+                    LoRaNode& origNode = loraNodes[originatorID];
+                    origNode.nodeId = originatorID;
+                    origNode.lastRSSI = 0;    // no direct RSSI from origin
+                    origNode.lastSNR = 0.0;
+                    origNode.lastSeen = currentTime;
+
+                    NodeMetricsSample sample = {currentTime, 0, 0.0};
+                    origNode.history.push_back(sample);
+                    if (origNode.history.size() > 50) {
+                      origNode.history.erase(origNode.history.begin());
                     }
+                    Serial.printf("[LoRa Nodes] Updated/Added originator: %s\n", originatorID.c_str());
                   }
+                  // *** END METRICS HISTORY CHANGES ***
                 }
               }
             }
@@ -701,10 +709,7 @@ void loop() {
   }
 
   updateMeshData();
-
-  // Show carousel (main screen or message)
   displayCarousel();
-
   dnsServer.processNextRequest();
 
   if (millis() - lastCleanupTime >= cleanupInterval) {
@@ -1251,10 +1256,164 @@ window.onload = function() {
   <h3>LoRa Nodes</h3>
   <ul id="loraNodeList"></ul>
   
-  <a href="/">Back to Main Page</a>
+
+    <a href="/">Back</a><br>
+    <a href="/metrics">Node Data</a>
 </body>
 </html>
 )rawliteral";
+
+// *** METRICS HISTORY PAGE ***
+// We’ll rename the “Timestamp (ms since boot)” column to “Time Ago”
+const char metricsPageHtml[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meshify Metrics History</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f7f6;
+      margin: 0; 
+      padding: 20px;
+    }
+    h2 {
+      text-align: center;
+      color: #333;
+    }
+    .node-block {
+      background-color: #fff;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      margin: 20px auto;
+      max-width: 600px;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+    .node-title {
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-bottom: 10px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 5px;
+      text-align: left;
+      font-size: 0.9em;
+    }
+    th {
+      background-color: #eee;
+    }
+    .timestamp {
+      font-size: 0.85em;
+      color: #666;
+    }
+    a {
+      display: block;
+      text-align: center;
+      margin-top: 20px;
+      font-weight: bold;
+      color: #007bff;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+  <script>
+    function fetchHistory() {
+      fetch('/metricsHistoryData')
+        .then(response => response.json())
+        .then(data => {
+          const container = document.getElementById('historyContainer');
+          container.innerHTML = '';
+
+          data.loraNodes.forEach(node => {
+            const nodeBlock = document.createElement('div');
+            nodeBlock.classList.add('node-block');
+
+            const title = document.createElement('div');
+            title.classList.add('node-title');
+            title.textContent = 'Node ID: ' + node.nodeId;
+            nodeBlock.appendChild(title);
+
+            // Create a table for the history data
+            const table = document.createElement('table');
+            const thead = document.createElement('thead');
+            thead.innerHTML = `
+              <tr>
+                <th>Time Ago</th>
+                <th>RSSI (dBm)</th>
+                <th>SNR (dB)</th>
+              </tr>`;
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            node.history.forEach(sample => {
+              const row = document.createElement('tr');
+
+              const tsCell = document.createElement('td');
+              tsCell.textContent = sample.timestamp; // now contains "X min ago" from server
+              row.appendChild(tsCell);
+
+              const rssiCell = document.createElement('td');
+              rssiCell.textContent = sample.rssi;
+              row.appendChild(rssiCell);
+
+              const snrCell = document.createElement('td');
+              snrCell.textContent = sample.snr;
+              row.appendChild(snrCell);
+
+              tbody.appendChild(row);
+            });
+            table.appendChild(tbody);
+            nodeBlock.appendChild(table);
+
+            container.appendChild(nodeBlock);
+          });
+        })
+        .catch(error => {
+          console.error('Error fetching metrics history:', error);
+        });
+    }
+
+    window.onload = function() {
+      fetchHistory();
+      // refresh every 5 seconds
+      setInterval(fetchHistory, 5000); 
+    };
+  </script>
+</head>
+<body>
+  <h2>LoRa Signal (Last Hour)</h2>
+  <div id="historyContainer"></div>
+  <a href="/nodes">Back to Nodes</a>
+  <a href="/">Back to Main</a>
+</body>
+</html>
+)rawliteral";
+
+/**
+ * Helper function to convert an elapsed time in milliseconds 
+ * into a human-readable relative time string.
+ * e.g., 30 sec => "30 sec ago", 5 min => "5 min ago", etc.
+ */
+String formatRelativeTime(uint64_t ageMs) {
+  uint64_t ageSec = ageMs / 1000;
+  if (ageSec < 60) {
+    return String(ageSec) + " sec ago";
+  } else if (ageSec < 3600) {
+    return String(ageSec / 60) + " min ago";
+  } else {
+    // If you only want hours as max unit, do:
+    return String(ageSec / 3600) + " hr ago";
+  }
+}
 
 void setupServerRoutes() {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -1341,7 +1500,50 @@ void setupServerRoutes() {
 
     scheduleLoRaTransmission(constructedMessage);
     request->redirect("/");
-  }); 
+  });
+
+  // *** METRICS HISTORY CHANGES ***
+  server.on("/metrics", HTTP_GET, [](AsyncWebServerRequest* request) {
+    request->send_P(200, "text/html", metricsPageHtml);
+  });
+
+  // Return only the last hour of samples, converting timestamp to relative time
+server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
+    uint64_t now = millis();
+    const uint64_t ONE_HOUR = 3600000;
+    String json = "{\"loraNodes\":[";
+
+    bool firstNode = true;
+    for (auto const& kv : loraNodes) {
+      if (!firstNode) json += ",";
+      firstNode = false;
+
+      const auto &node = kv.second;
+      json += "{\"nodeId\":\"" + node.nodeId + "\",\"history\":[";
+
+      bool firstSample = true;
+      for (const auto &sample : node.history) {
+        uint64_t ageMs = now - sample.timestamp;
+        // Skip old samples AND skip zero-RSSI samples
+        if (ageMs <= ONE_HOUR && sample.rssi != 0) {
+          if (!firstSample) json += ",";
+          firstSample = false;
+
+          String relativeTime = formatRelativeTime(ageMs);
+
+          json += "{\"timestamp\":\"" + relativeTime
+               + "\",\"rssi\":" + String(sample.rssi)
+               + ",\"snr\":" + String(sample.snr,2) + "}";
+        }
+      }
+      json += "]}";
+    }
+    json += "]}";
+
+    request->send(200, "application/json", json);
+});
+
+  // *** END METRICS HISTORY CHANGES ***
 }
 
 void serveHtml(AsyncWebServerRequest* request, const char* htmlContent) {
