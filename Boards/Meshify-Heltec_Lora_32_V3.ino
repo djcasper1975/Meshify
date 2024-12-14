@@ -495,7 +495,7 @@ void transmitWithDutyCycle(const String& message) {
 }
 
 unsigned long lastHeartbeatTime = 0;
-const unsigned long heartbeatInterval = 60000; // 1 minute
+const unsigned long heartbeatInterval = 900000; // 15 minutes
 
 void sendHeartbeat() {
   String heartbeatWithoutCRC = "HEARTBEAT|" + getCustomNodeId(getNodeId());
