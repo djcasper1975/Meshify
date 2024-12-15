@@ -2,7 +2,7 @@
 //14-12-2024  added days weeks months to messages instead of just seconds hours..
 //Added Carousel showing messages
 //Removed duplicate startup calls.
-//added node history
+//Added node history
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
 ////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  I  FFFF Y   Y //
@@ -185,7 +185,7 @@ const unsigned long cleanupInterval = 60000; // 1 minute
 
 void cleanupLoRaNodes() {
   uint64_t currentTime = millis();
-  const uint64_t timeout = 960000; // 16 minutes
+  const uint64_t timeout = 8.64e+7; // 24 hours node is removed if not seen
 
   for (auto it = loraNodes.begin(); it != loraNodes.end();) {
     if (currentTime - it->second.lastSeen > timeout) {
