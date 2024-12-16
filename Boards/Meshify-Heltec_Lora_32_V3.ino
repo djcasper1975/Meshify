@@ -1,7 +1,8 @@
-//Test v1.00.002
+//Test v1.00.003
 //16-12-2024
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
 //Fixed Node history showing only node but no rssi when nodelist cleared inactive nodes.
+//Fixed Inactive Nodes Not Removed.
 ////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  I  FFFF Y   Y //
 // MM  MM  E      S      H   H  I  F     Y Y  //
@@ -1430,36 +1431,34 @@ void setupServerRoutes() {
     request->send(200, "application/json", "{\"totalCount\":" + String(getNodeCount()) + ", \"nodeId\":\"" + getCustomNodeId(getNodeId()) + "\"}");
   });
 
-  server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest* request) {
-    updateMeshData();
-    String json = "{\"wifiNodes\":[";
-    auto wifiNodeList = mesh.getNodeList();
-    bool firstWifi = true;
-    for (auto node : wifiNodeList) {
-        if (!firstWifi) json += ",";
-        json += "\"" + getCustomNodeId(node) + "\"";
-        firstWifi = false;
-    }
-    json += "], \"loraNodes\":[";
-    bool firstLora = true;
-    uint64_t currentTime = millis();
-    for (auto const& [nodeId, loraNode] : loraNodes) {
-        if (!firstLora) json += ",";
-        uint64_t lastSeenSeconds = (currentTime - loraNode.lastSeen) / 1000;
-        String lastSeenStr;
-        if (lastSeenSeconds < 60) {
-          lastSeenStr = String(lastSeenSeconds) + " sec ago";
-        } else {
-          lastSeenStr = String(lastSeenSeconds / 60) + " min ago";
-        }
-        json += "{\"nodeId\":\"" + nodeId + "\",\"lastRSSI\":" + String(loraNode.lastRSSI)
-              + ",\"lastSNR\":" + String(loraNode.lastSNR, 2)
-              + ",\"lastSeen\":\"" + lastSeenStr + "\",\"lastSeenSeconds\":\"" + String(lastSeenSeconds) + "\"}";
-        firstLora = false;
-    }
-    json += "]}";
-    request->send(200, "application/json", json);
-  });
+server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest* request) {
+  updateMeshData();
+  String json = "{\"wifiNodes\":[";
+  auto wifiNodeList = mesh.getNodeList();
+  bool firstWifi = true;
+  for (auto node : wifiNodeList) {
+      if (!firstWifi) json += ",";
+      json += "\"" + getCustomNodeId(node) + "\"";
+      firstWifi = false;
+  }
+  json += "], \"loraNodes\":[";
+
+  bool firstLora = true;
+  uint64_t currentTime = millis();
+  const uint64_t FIFTEEN_MINUTES = 900000; // 15 minutes in milliseconds
+  for (auto const& [nodeId, loraNode] : loraNodes) {
+      uint64_t lastSeenTime = loraNode.lastSeen;
+      if (currentTime - lastSeenTime <= FIFTEEN_MINUTES) {  // Only include nodes seen in the last 15 minutes
+          if (!firstLora) json += ",";
+          json += "{\"nodeId\":\"" + nodeId + "\",\"lastRSSI\":" + String(loraNode.lastRSSI)
+                + ",\"lastSNR\":" + String(loraNode.lastSNR, 2)
+                + ",\"lastSeen\":\"" + formatRelativeTime(currentTime - lastSeenTime) + "\"}";
+          firstLora = false;
+      }
+  }
+  json += "]}";
+  request->send(200, "application/json", json);
+});
 
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest* request) {
     String newMessage = "";
