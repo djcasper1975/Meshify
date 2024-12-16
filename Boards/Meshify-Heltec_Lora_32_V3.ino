@@ -1,9 +1,7 @@
-//Test v1.00.001
-//14-12-2024  added days weeks months to messages instead of just seconds hours..
-//Added Carousel showing messages
-//Removed duplicate startup calls.
-//Added node history
+//Test v1.00.002
+//16-12-2024
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
+//Fixed Node history showing only node but no rssi when nodelist cleared inactive nodes.
 ////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  I  FFFF Y   Y //
 // MM  MM  E      S      H   H  I  F     Y Y  //
@@ -185,7 +183,7 @@ const unsigned long cleanupInterval = 60000; // 1 minute
 
 void cleanupLoRaNodes() {
   uint64_t currentTime = millis();
-  const uint64_t timeout = 8.64e+7; // 24 hours node is removed if not seen
+  const uint64_t timeout = 86400000; // 24 hours node is removed if not seen
 
   for (auto it = loraNodes.begin(); it != loraNodes.end();) {
     if (currentTime - it->second.lastSeen > timeout) {
@@ -616,7 +614,7 @@ void loop() {
 
               NodeMetricsSample sample = {currentTime, rssi, snr};
               node.history.push_back(sample);
-              if (node.history.size() > 50) {
+              if (node.history.size() > 60) {
                 node.history.erase(node.history.begin());
               }
               // *** END METRICS HISTORY CHANGES ***
@@ -666,7 +664,7 @@ void loop() {
 
                     NodeMetricsSample sample = {currentTime, rssi, snr};
                     relayNode.history.push_back(sample);
-                    if (relayNode.history.size() > 50) {
+                    if (relayNode.history.size() > 60) {
                       relayNode.history.erase(relayNode.history.begin());
                     }
                     Serial.printf("[LoRa Nodes] Updated/Added node: %s\n", relayID.c_str());
@@ -674,21 +672,7 @@ void loop() {
                     Serial.println("[LoRa Nodes] RelayID is own node, not updating.");
                   }
 
-                  // Also store a zero-RSSI sample for the originator, if not ourselves
-                  if (originatorID != getCustomNodeId(getNodeId())) {
-                    LoRaNode& origNode = loraNodes[originatorID];
-                    origNode.nodeId = originatorID;
-                    origNode.lastRSSI = 0;    // no direct RSSI from origin
-                    origNode.lastSNR = 0.0;
-                    origNode.lastSeen = currentTime;
 
-                    NodeMetricsSample sample = {currentTime, 0, 0.0};
-                    origNode.history.push_back(sample);
-                    if (origNode.history.size() > 50) {
-                      origNode.history.erase(origNode.history.begin());
-                    }
-                    Serial.printf("[LoRa Nodes] Updated/Added originator: %s\n", originatorID.c_str());
-                  }
                   // *** END METRICS HISTORY CHANGES ***
                 }
               }
@@ -1194,71 +1178,72 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
     a:hover {
       text-decoration: underline;
     }
+    .node-section {
+      margin-bottom: 30px;
+    }
   </style>
   <script>
-function fetchNodes() {
-  fetch('/nodesData')
-    .then(response => response.json())
-    .then(data => {
-      const wifiUl = document.getElementById('wifiNodeList');
-      wifiUl.innerHTML = '';
-      data.wifiNodes.forEach((node, index) => {
-        const li = document.createElement('li');
-        li.classList.add('node', 'wifi');
-        li.textContent = 'Node ' + (index + 1) + ': ' + node;
-        wifiUl.appendChild(li);
-      });
+    function fetchNodes() {
+      fetch('/nodesData')
+        .then(response => response.json())
+        .then(data => {
+          const wifiUl = document.getElementById('wifiNodeList');
+          const loraUl = document.getElementById('loraNodeList');
 
-      const loraUl = document.getElementById('loraNodeList');
-      loraUl.innerHTML = '';
-      const currentTime = Date.now();
+          // Clear previous lists
+          wifiUl.innerHTML = '';
+          loraUl.innerHTML = '';
 
-      data.loraNodes.forEach((node, index) => {
-        // only show nodes seen in the last 16 min (similar to cleanupLoRaNodes)
-        const lastSeenTime = new Date(currentTime - (parseInt(node.lastSeenSeconds) * 1000));
-        if (lastSeenTime < currentTime - (16 * 60 * 1000)) {
-          return;
-        }
+          // Update WiFi Nodes list
+          const wifiCount = data.wifiNodes.length;
+          document.getElementById('wifiCount').innerText = 'WiFi Nodes Connected: ' + wifiCount;
+          data.wifiNodes.forEach((node, index) => {
+            const li = document.createElement('li');
+            li.classList.add('node', 'wifi');
+            li.textContent = 'Node ' + (index + 1) + ': ' + node;
+            wifiUl.appendChild(li);
+          });
 
-        const li = document.createElement('li');
-        li.classList.add('node', 'lora');
-        li.innerHTML = `
-          <strong>Node ${index + 1}:</strong> ${node.nodeId}<br>
-          RSSI: ${node.lastRSSI} dBm, SNR: ${node.lastSNR} dB<br>
-          Last seen: ${node.lastSeen}
-        `;
-        loraUl.appendChild(li);
-      });
+          // Update LoRa Nodes list
+          const loraCount = data.loraNodes.length;
+          document.getElementById('loraCount').innerText = 'LoRa Nodes Active: ' + loraCount;
+          data.loraNodes.forEach((node, index) => {
+            const li = document.createElement('li');
+            li.classList.add('node', 'lora');
+            li.innerHTML = ` 
+              <strong>Node ${index + 1}:</strong> ${node.nodeId}<br>
+              RSSI: ${node.lastRSSI} dBm, SNR: ${node.lastSNR} dB<br>
+              Last seen: ${node.lastSeen}
+            `;
+            loraUl.appendChild(li);
+          });
+        })
+        .catch(error => console.error('Error fetching nodes:', error));
+    }
 
-      document.getElementById('nodeCount').innerHTML = 
-        'WiFi Nodes Connected: ' + data.wifiNodes.length + '<br>' +
-        'LoRa Nodes Detected (15 min): ' + data.loraNodes.length;
-    })
-    .catch(error => console.error('Error fetching nodes:', error));
-}
-
-window.onload = function() {
-  fetchNodes();
-  setInterval(fetchNodes, 5000);
-};
+    window.onload = function() {
+      fetchNodes();
+      setInterval(fetchNodes, 5000); // Update node data every 5 seconds
+    };
   </script>
 </head>
 <body>
   <h2>Meshify Nodes</h2>
-  <div id="nodeCount">
-    WiFi Nodes Connected: 0<br>
-    LoRa Nodes Detected: 0
+  
+  <!-- Node count for WiFi -->
+  <div class="node-section">
+    <span id="wifiCount">WiFi Nodes Connected: 0</span>
+    <ul id="wifiNodeList"></ul>
   </div>
-  
-  <h3>WiFi Nodes</h3>
-  <ul id="wifiNodeList"></ul>
-  
-  <h3>LoRa Nodes</h3>
-  <ul id="loraNodeList"></ul>
-  
 
-    <a href="/">Back</a><br>
-    <a href="/metrics">Node Data</a>
+  <!-- Node count for LoRa -->
+  <div class="node-section">
+    <span id="loraCount">LoRa Nodes Active: 0</span>
+    <ul id="loraNodeList"></ul>
+  </div>
+
+  <a href="/">Back</a><br>
+  <a href="/metrics">Node Data</a>
 </body>
 </html>
 )rawliteral";
@@ -1270,7 +1255,7 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
 <html lang="en">
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Meshify Metrics History</title>
+  <title>LoRa Signal History</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -1390,7 +1375,7 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
   </script>
 </head>
 <body>
-  <h2>LoRa Signal (Last Hour)</h2>
+  <h2>LoRa Signal History</h2>
   <div id="historyContainer"></div>
   <a href="/nodes">Back to Nodes</a>
   <a href="/">Back to Main</a>
@@ -1510,7 +1495,7 @@ void setupServerRoutes() {
   // Return only the last hour of samples, converting timestamp to relative time
 server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
     uint64_t now = millis();
-    const uint64_t ONE_HOUR = 3600000;
+    const uint64_t ONE_DAY = 86400000;
     String json = "{\"loraNodes\":[";
 
     bool firstNode = true;
@@ -1525,7 +1510,7 @@ server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
       for (const auto &sample : node.history) {
         uint64_t ageMs = now - sample.timestamp;
         // Skip old samples AND skip zero-RSSI samples
-        if (ageMs <= ONE_HOUR && sample.rssi != 0) {
+        if (ageMs <= ONE_DAY && sample.rssi != 0) {
           if (!firstSample) json += ",";
           firstSample = false;
 
