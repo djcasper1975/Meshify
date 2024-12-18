@@ -1,8 +1,8 @@
-//Test v1.00.003
-//16-12-2024
+//Test v1.00.004
+//17-12-2024
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
-//Screen Inactive Lora Nodes was still showing when inactive. Fixed.
-//Now sends heartbeat after 20 seconds of booting.
+//Messages show time in 1 hour 1 min instead of 1 hour 2 hour.
+//Node History Now show time in 1 hour 1 min instead of 1 hour 2 hour.
 ////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  I  FFFF Y   Y //
 // MM  MM  E      S      H   H  I  F     Y Y  //
@@ -1006,84 +1006,89 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       });
     }
 
-    function fetchData() {
-      fetch('/messages')
-        .then(response => response.json())
-        .then(data => {
-          deviceCurrentTime = data.currentDeviceTime;
+function fetchData() {
+  fetch('/messages')
+    .then(response => response.json())
+    .then(data => {
+      deviceCurrentTime = data.currentDeviceTime;
 
-          const ul = document.getElementById('messageList');
-          ul.innerHTML = '';
+      const ul = document.getElementById('messageList');
+      ul.innerHTML = '';
 
-          const currentNodeId = localStorage.getItem('nodeId');
+      const currentNodeId = localStorage.getItem('nodeId');
 
-          data.messages.forEach(msg => {
-            const li = document.createElement('li');
-            li.classList.add('message');
+      data.messages.forEach(msg => {
+        const li = document.createElement('li');
+        li.classList.add('message');
 
-            const isSentByCurrentNode = msg.nodeId === currentNodeId;
-            if (isSentByCurrentNode) {
-              li.classList.add('sent');
-            } else {
-              li.classList.add('received');
-              if (msg.source === '[LoRa]') {
-                li.classList.add('lora');
-              } else {
-                li.classList.add('wifi');
-              }
-            }
+        const isSentByCurrentNode = msg.nodeId === currentNodeId;
+        if (isSentByCurrentNode) {
+          li.classList.add('sent');
+        } else {
+          li.classList.add('received');
+          if (msg.source === '[LoRa]') {
+            li.classList.add('lora');
+          } else {
+            li.classList.add('wifi');
+          }
+        }
 
-            const messageAgeMillis = deviceCurrentTime - msg.timeReceived;
-            const messageAgeSeconds = Math.floor(messageAgeMillis / 1000);
+        const messageAgeMillis = deviceCurrentTime - msg.timeReceived;
+        const messageAgeSeconds = Math.floor(messageAgeMillis / 1000);
 
-            let timestamp = '';
-            if (messageAgeSeconds < 60) {
-              timestamp = `${messageAgeSeconds} sec ago`;
-            } else if (messageAgeSeconds < 3600) {
-              const minutes = Math.floor(messageAgeSeconds / 60);
-              timestamp = `${minutes} min ago`;
-            } else if (messageAgeSeconds < 86400) {
-              const hours = Math.floor(messageAgeSeconds / 3600);
-              timestamp = `${hours} hr ago`;
-            } else if (messageAgeSeconds < 604800) {
-              const days = Math.floor(messageAgeSeconds / 86400);
-              timestamp = `${days} day${days>1?'s':''} ago`;
-            } else if (messageAgeSeconds < 2592000) {
-              const weeks = Math.floor(messageAgeSeconds / 604800);
-              timestamp = `${weeks} week${weeks>1?'s':''} ago`;
-            } else if (messageAgeSeconds < 31536000) {
-              const months = Math.floor(messageAgeSeconds / 2592000);
-              timestamp = `${months} month${months>1?'s':''} ago`;
-            } else {
-              const years = Math.floor(messageAgeSeconds / 31536000);
-              timestamp = `${years} year${years>1?'s':''} ago`;
-            }
+        let timestamp = '';
+        if (messageAgeSeconds < 60) {
+          timestamp = `${messageAgeSeconds} sec ago`;
+        } else if (messageAgeSeconds < 3600) {
+          const minutes = Math.floor(messageAgeSeconds / 60);
+          timestamp = `${minutes} min ago`;
+        } else if (messageAgeSeconds < 86400) {
+          const hours = Math.floor(messageAgeSeconds / 3600);
+          const minutes = Math.floor((messageAgeSeconds % 3600) / 60);
+          if (minutes > 0) {
+            timestamp = `${hours} hr ${minutes} min ago`;
+          } else {
+            timestamp = `${hours} hr ago`;
+          }
+        } else if (messageAgeSeconds < 604800) {
+          const days = Math.floor(messageAgeSeconds / 86400);
+          timestamp = `${days} day${days > 1 ? 's' : ''} ago`;
+        } else if (messageAgeSeconds < 2592000) {
+          const weeks = Math.floor(messageAgeSeconds / 604800);
+          timestamp = `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+        } else if (messageAgeSeconds < 31536000) {
+          const months = Math.floor(messageAgeSeconds / 2592000);
+          timestamp = `${months} month${months > 1 ? 's' : ''} ago`;
+        } else {
+          const years = Math.floor(messageAgeSeconds / 31536000);
+          timestamp = `${years} year${years > 1 ? 's' : ''} ago`;
+        }
 
-            const nodeIdHtml = `Node Id: ${msg.nodeId}`;
-            const senderHtml = `<strong>${msg.sender || 'Unknown'}:</strong> `;
-            let relayIdHtml = '';
-            if (msg.relayID && msg.relayID !== currentNodeId) {
-              relayIdHtml = `<span class="message-relayid">Relay ID: ${msg.relayID}</span>`;
-            }
+        const nodeIdHtml = `Node Id: ${msg.nodeId}`;
+        const senderHtml = `<strong>${msg.sender || 'Unknown'}:</strong> `;
+        let relayIdHtml = '';
+        if (msg.relayID && msg.relayID !== currentNodeId) {
+          relayIdHtml = `<span class="message-relayid">Relay ID: ${msg.relayID}</span>`;
+        }
 
-            let rssiSnrHtml = '';
-            if (msg.source === '[LoRa]' && msg.rssi !== undefined && msg.snr !== undefined) {
-              rssiSnrHtml = `<span class="message-rssi-snr">RSSI: ${msg.rssi} dBm, SNR: ${msg.snr} dB</span>`;
-            }
+        let rssiSnrHtml = '';
+        if (msg.source === '[LoRa]' && msg.rssi !== undefined && msg.snr !== undefined) {
+          rssiSnrHtml = `<span class="message-rssi-snr">RSSI: ${msg.rssi} dBm, SNR: ${msg.snr} dB</span>`;
+        }
 
-            li.innerHTML = `
-              <span class="message-nodeid">${nodeIdHtml}</span>
-              <div class="message-content">${senderHtml}${msg.content}</div>
-              ${relayIdHtml}
-              <span class="message-time">${timestamp}</span>
-              ${rssiSnrHtml}
-            `;
-            ul.appendChild(li);
-          });
+        li.innerHTML = `
+          <span class="message-nodeid">${nodeIdHtml}</span>
+          <div class="message-content">${senderHtml}${msg.content}</div>
+          ${relayIdHtml}
+          <span class="message-time">${timestamp}</span>
+          ${rssiSnrHtml}
+        `;
+        ul.appendChild(li);
+      });
 
-          ul.scrollTop = ul.scrollHeight;
-        })
-        .catch(error => console.error('Error fetching messages:', error));
+      ul.scrollTop = ul.scrollHeight;
+    })
+    .catch(error => console.error('Error fetching messages:', error));
 
       fetch('/deviceCount')
         .then(response => response.json())
@@ -1265,7 +1270,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
   </div>
 
   <a href="/">Back</a><br>
-  <a href="/metrics">Node Data</a>
+  <a href="/metrics">Node History</a>
 </body>
 </html>
 )rawliteral";
@@ -1400,7 +1405,7 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
   <h2>LoRa Signal History</h2>
   <div id="historyContainer"></div>
   <a href="/nodes">Back to Nodes</a>
-  <a href="/">Back to Main</a>
+  <a href="/">Back to Chat</a>
 </body>
 </html>
 )rawliteral";
@@ -1417,8 +1422,13 @@ String formatRelativeTime(uint64_t ageMs) {
   } else if (ageSec < 3600) {
     return String(ageSec / 60) + " min ago";
   } else {
-    // If you only want hours as max unit, do:
-    return String(ageSec / 3600) + " hr ago";
+    uint64_t hours = ageSec / 3600;
+    uint64_t minutes = (ageSec % 3600) / 60;
+    if (minutes > 0) {
+      return String(hours) + " hr " + String(minutes) + " min ago";
+    } else {
+      return String(hours) + " hr ago";
+    }
   }
 }
 
