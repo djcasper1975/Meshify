@@ -1,8 +1,9 @@
-//Test v1.00.004
-//17-12-2024
+//Test v1.00.005
+//20-12-2024
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
-//Messages show time in 1 hour 1 min instead of 1 hour 2 hour.
-//Node History Now show time in 1 hour 1 min instead of 1 hour 2 hour.
+//Improved Metrics Page to show best rssi snr.
+//Fixed wifi only node messages showing numbers instead of converted node id.
+//Moved navigation to top of node and hostory page.
 ////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  I  FFFF Y   Y //
 // MM  MM  E      S      H   H  I  F     Y Y  //
@@ -744,14 +745,16 @@ void initMesh() {
 void receivedCallback(uint32_t from, String& message) {
   Serial.printf("[WiFi Rx] From %u: %s\n", from, message.c_str());
 
+  // Extract CRC from the message
   int lastSeparatorIndex = message.lastIndexOf('|');
   if (lastSeparatorIndex == -1) {
-    Serial.println("[WiFi Rx] Invalid format.");
+    Serial.println("[WiFi Rx] Invalid format (no CRC).");
     return;
   }
   String crcStr = message.substring(lastSeparatorIndex + 1);
   String messageWithoutCRC = message.substring(0, lastSeparatorIndex);
 
+  // Compute and verify CRC
   uint16_t receivedCRC = (uint16_t)strtol(crcStr.c_str(), NULL, 16);
   uint16_t computedCRC = crc16_ccitt((const uint8_t *)messageWithoutCRC.c_str(), messageWithoutCRC.length());
 
@@ -760,46 +763,90 @@ void receivedCallback(uint32_t from, String& message) {
     return;
   } else {
     Serial.println("[WiFi Rx] CRC valid.");
+  }
 
-    int firstSeparator = messageWithoutCRC.indexOf('|');
-    int secondSeparator = messageWithoutCRC.indexOf('|', firstSeparator + 1);
-    int thirdSeparator = messageWithoutCRC.indexOf('|', secondSeparator + 1);
-    int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
+  // Parse message components
+  int firstSeparator = messageWithoutCRC.indexOf('|');
+  int secondSeparator = messageWithoutCRC.indexOf('|', firstSeparator + 1);
+  int thirdSeparator = messageWithoutCRC.indexOf('|', secondSeparator + 1);
+  int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
 
-    if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
-      Serial.println("[WiFi Rx] Invalid format.");
-      return;
-    }
+  if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
+    Serial.println("[WiFi Rx] Invalid format (missing separators).");
+    return;
+  }
 
-    String messageID = messageWithoutCRC.substring(0, firstSeparator);
-    String originatorID = messageWithoutCRC.substring(firstSeparator + 1, secondSeparator);
-    String senderID = messageWithoutCRC.substring(secondSeparator + 1, thirdSeparator);
-    String messageContent = messageWithoutCRC.substring(thirdSeparator + 1, fourthSeparator);
-    String relayID = messageWithoutCRC.substring(fourthSeparator + 1);
+  String messageID = messageWithoutCRC.substring(0, firstSeparator);
+  String originatorID = messageWithoutCRC.substring(firstSeparator + 1, secondSeparator);
+  String senderID = messageWithoutCRC.substring(secondSeparator + 1, thirdSeparator);
+  String messageContent = messageWithoutCRC.substring(thirdSeparator + 1, fourthSeparator);
+  String relayID = messageWithoutCRC.substring(fourthSeparator + 1);
 
-    if (messageWithoutCRC.startsWith("HEARTBEAT|")) {
-      Serial.println("[WiFi Rx] Skipping heartbeat relay over WiFi.");
-      return;
-    }
+  // **Convert originatorID to custom format if necessary**
+  if (!originatorID.startsWith("!M")) {
+    // Attempt to convert numeric ID to custom format
+    uint32_t numericId = originatorID.toInt();
+    originatorID = getCustomNodeId(numericId);
+    Serial.printf("[WiFi Rx] Converted originatorID to custom format: %s\n", originatorID.c_str());
+  }
 
-    if (originatorID == getCustomNodeId(getNodeId())) {
-      Serial.println("[WiFi Rx] Own message, just adding locally...");
-      addMessage(originatorID, messageID, senderID, messageContent, "[WiFi]", relayID);
-      return;
-    }
+  // **Convert relayID to custom format if necessary**
+  if (!relayID.startsWith("!M")) {
+    // Attempt to convert numeric relayID to custom format
+    uint32_t numericRelayId = relayID.toInt();
+    relayID = getCustomNodeId(numericRelayId);
+    Serial.printf("[WiFi Rx] Converted relayID to custom format: %s\n", relayID.c_str());
+  }
 
-    auto& status = messageTransmissions[messageID];
-    if (status.transmittedViaWiFi && status.transmittedViaLoRa) {
-      Serial.println("[WiFi Rx] Already relayed both ways, ignoring...");
-      return;
-    }
+  // **Handle Heartbeat Messages**
+  if (messageWithoutCRC.startsWith("HEARTBEAT|")) {
+    Serial.println("[WiFi Rx] Skipping heartbeat relay over WiFi.");
+    return;
+  }
 
-    Serial.printf("[WiFi Rx] Adding message: %s\n", message.c_str());
+  // **Ignore Own Messages**
+  if (originatorID == getCustomNodeId(getNodeId())) {
+    Serial.println("[WiFi Rx] Own message, just adding locally...");
     addMessage(originatorID, messageID, senderID, messageContent, "[WiFi]", relayID);
+    return;
+  }
 
-    if (!status.transmittedViaLoRa) {
-      scheduleLoRaTransmission(message);
+  // **Check if Message Already Relayed**
+  auto& status = messageTransmissions[messageID];
+  if (status.transmittedViaWiFi && status.transmittedViaLoRa) {
+    Serial.println("[WiFi Rx] Already relayed both via WiFi and LoRa, ignoring...");
+    return;
+  }
+
+  // **Add Message to Local Storage**
+  Serial.printf("[WiFi Rx] Adding message: %s\n", message.c_str());
+  addMessage(originatorID, messageID, senderID, messageContent, "[WiFi]", relayID);
+
+  // **Schedule LoRa Transmission if Not Already Done**
+  if (!status.transmittedViaLoRa) {
+    scheduleLoRaTransmission(message);
+  }
+
+  // **Update LoRa Node Metrics Based on relayID**
+  uint64_t currentTime = millis();
+  if (relayID != getCustomNodeId(getNodeId())) {
+    // Update or add the relay node in the LoRa nodes map
+    LoRaNode& relayNode = loraNodes[relayID];
+    relayNode.nodeId = relayID;
+    relayNode.lastRSSI = radio.getRSSI();
+    relayNode.lastSNR = radio.getSNR();
+    relayNode.lastSeen = currentTime;
+
+    // Add a new metrics sample
+    NodeMetricsSample sample = {currentTime, radio.getRSSI(), radio.getSNR()};
+    relayNode.history.push_back(sample);
+    if (relayNode.history.size() > 60) {
+      relayNode.history.erase(relayNode.history.begin());
     }
+
+    Serial.printf("[LoRa Nodes] Updated/Added node: %s\n", relayID.c_str());
+  } else {
+    Serial.println("[LoRa Nodes] RelayID is own node, not updating.");
   }
 }
 
@@ -1136,6 +1183,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body { 
@@ -1255,8 +1303,9 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
   </script>
 </head>
 <body>
+   <a href="/">Back</a> | <a href="/metrics">History</a>
   <h2>Meshify Nodes</h2>
-  
+   
   <!-- Node count for WiFi -->
   <div class="node-section">
     <span id="wifiCount">WiFi Nodes Connected: 0</span>
@@ -1268,19 +1317,16 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
     <span id="loraCount">LoRa Nodes Active: 0</span>
     <ul id="loraNodeList"></ul>
   </div>
-
-  <a href="/">Back</a><br>
-  <a href="/metrics">Node History</a>
 </body>
 </html>
 )rawliteral";
 
 // *** METRICS HISTORY PAGE ***
-// We’ll rename the “Timestamp (ms since boot)” column to “Time Ago”
 const char metricsPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LoRa Signal History</title>
   <style>
@@ -1294,9 +1340,15 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
       text-align: center;
       color: #333;
     }
+    .node-id {
+      text-align: center;
+      font-size: 1.2em;
+      color: #555;
+      margin-top: 10px;
+    }
     .node-block {
       background-color: #fff;
-      border: 1px solid #ccc;
+      border: 2px solid #ccc;
       border-radius: 8px;
       margin: 20px auto;
       max-width: 600px;
@@ -1325,19 +1377,39 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
       font-size: 0.85em;
       color: #666;
     }
-    a {
-      display: block;
-      text-align: center;
-      margin-top: 20px;
-      font-weight: bold;
-      color: #007bff;
-      text-decoration: none;
+    /* Flexbox styles for navigation links */
+    .nav-links {
+      display: flex;                 /* Enables Flexbox layout */
+      justify-content: center;       /* Centers the links horizontally */
+      align-items: center;           /* Aligns the links vertically */
+      gap: 10px;                     /* Adds space between the links */
+      margin-bottom: 20px;           /* Adds space below the links */
     }
-    a:hover {
-      text-decoration: underline;
+    .nav-links a {
+      text-decoration: none;         /* Removes underline from links */
+      color: #007bff;                /* Sets link color */
+      font-weight: bold;             /* Makes links bold */
+    }
+    .nav-links a:hover {
+      text-decoration: underline;    /* Underlines links on hover */
     }
   </style>
   <script>
+    // Fetch Node ID and set it on page load
+    window.onload = function() {
+      // Assuming the Node ID is being fetched from /deviceCount route
+      fetch('/deviceCount')
+        .then(response => response.json())
+        .then(data => {
+          const nodeIdElement = document.getElementById('nodeIdDisplay');
+          nodeIdElement.textContent = `Node ID: ${data.nodeId}`;
+        })
+        .catch(error => console.error('Error fetching Node ID:', error));
+
+      fetchHistory();
+      setInterval(fetchHistory, 5000); 
+    };
+
     function fetchHistory() {
       fetch('/metricsHistoryData')
         .then(response => response.json())
@@ -1345,27 +1417,50 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
           const container = document.getElementById('historyContainer');
           container.innerHTML = '';
 
+          // Display Node ID, Best RSSI, and Best SNR for each node at the top in a table
           data.loraNodes.forEach(node => {
             const nodeBlock = document.createElement('div');
             nodeBlock.classList.add('node-block');
 
-            const title = document.createElement('div');
-            title.classList.add('node-title');
-            title.textContent = 'Node ID: ' + node.nodeId;
-            nodeBlock.appendChild(title);
+            // Display Node ID above the table
+            const nodeTitle = document.createElement('div');
+            nodeTitle.classList.add('node-title');
+            nodeTitle.textContent = `Node ID: ${node.nodeId}`;
+            nodeBlock.appendChild(nodeTitle);
 
-            // Create a table for the history data
-            const table = document.createElement('table');
-            const thead = document.createElement('thead');
-            thead.innerHTML = `
+            // Create a table for Best RSSI and Best SNR
+            const nodeTable = document.createElement('table');
+            const nodeHeader = document.createElement('thead');
+            nodeHeader.innerHTML = `
+              <tr>
+                <th>Best Signal RSSI (dBm)</th>
+                <th>Best Signal SNR (dB)</th>
+              </tr>`;
+            nodeTable.appendChild(nodeHeader);
+
+            const nodeBody = document.createElement('tbody');
+            const nodeRow = document.createElement('tr');
+            nodeRow.innerHTML = `
+              <td>${node.bestRssi}</td>
+              <td>${node.bestSnr}</td>`;
+            nodeBody.appendChild(nodeRow);
+            nodeTable.appendChild(nodeBody);
+
+            // Append the node table to the node block
+            nodeBlock.appendChild(nodeTable);
+
+            // Create table for the history data
+            const historyTable = document.createElement('table');
+            const historyHeader = document.createElement('thead');
+            historyHeader.innerHTML = `
               <tr>
                 <th>Time Ago</th>
                 <th>RSSI (dBm)</th>
                 <th>SNR (dB)</th>
               </tr>`;
-            table.appendChild(thead);
+            historyTable.appendChild(historyHeader);
 
-            const tbody = document.createElement('tbody');
+            const historyBody = document.createElement('tbody');
             node.history.forEach(sample => {
               const row = document.createElement('tr');
 
@@ -1381,10 +1476,10 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
               snrCell.textContent = sample.snr;
               row.appendChild(snrCell);
 
-              tbody.appendChild(row);
+              historyBody.appendChild(row);
             });
-            table.appendChild(tbody);
-            nodeBlock.appendChild(table);
+            historyTable.appendChild(historyBody);
+            nodeBlock.appendChild(historyTable);
 
             container.appendChild(nodeBlock);
           });
@@ -1393,42 +1488,52 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
           console.error('Error fetching metrics history:', error);
         });
     }
-
-    window.onload = function() {
-      fetchHistory();
-      // refresh every 5 seconds
-      setInterval(fetchHistory, 5000); 
-    };
   </script>
 </head>
 <body>
-  <h2>LoRa Signal History</h2>
+  <div class="nav-links">
+    <a href="/nodes">NodeList</a> | <a href="/">Chat</a>
+  </div>
+  <h2>LoRa 24hr History</h2>
+  <!-- Node ID displayed below the title -->
+  <div class="node-id" id="nodeIdDisplay">Node ID: Loading...</div>
   <div id="historyContainer"></div>
-  <a href="/nodes">Back to Nodes</a>
-  <a href="/">Back to Chat</a>
 </body>
 </html>
 )rawliteral";
 
+
 /**
  * Helper function to convert an elapsed time in milliseconds 
  * into a human-readable relative time string.
- * e.g., 30 sec => "30 sec ago", 5 min => "5 min ago", etc.
+ * e.g., 30 sec => "30 sec ago", 5 min => "5 min ago", 2 hr 30 min 15 sec ago
  */
 String formatRelativeTime(uint64_t ageMs) {
   uint64_t ageSec = ageMs / 1000;
   if (ageSec < 60) {
     return String(ageSec) + " sec ago";
   } else if (ageSec < 3600) {
-    return String(ageSec / 60) + " min ago";
+    uint64_t minutes = ageSec / 60;
+    uint64_t seconds = ageSec % 60;
+    String result = String(minutes) + " min";
+    if (seconds > 0) {
+      result += " " + String(seconds) + " sec";
+    }
+    result += " ago";
+    return result;
   } else {
     uint64_t hours = ageSec / 3600;
     uint64_t minutes = (ageSec % 3600) / 60;
+    uint64_t seconds = ageSec % 60;
+    String result = String(hours) + " hr";
     if (minutes > 0) {
-      return String(hours) + " hr " + String(minutes) + " min ago";
-    } else {
-      return String(hours) + " hr ago";
+      result += " " + String(minutes) + " min";
     }
+    if (seconds > 0) {
+      result += " " + String(seconds) + " sec";
+    }
+    result += " ago";
+    return result;
   }
 }
 
@@ -1534,12 +1639,26 @@ server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
       firstNode = false;
 
       const auto &node = kv.second;
-      json += "{\"nodeId\":\"" + node.nodeId + "\",\"history\":[";
+
+      // Find Best RSSI and Best SNR independently
+      int bestRssi = node.history[0].rssi;
+      float bestSnr = node.history[0].snr;
+
+      for (const auto &sample : node.history) {
+        if (sample.rssi > bestRssi) {
+          bestRssi = sample.rssi;
+        }
+        if (sample.snr > bestSnr) {
+          bestSnr = sample.snr;
+        }
+      }
+
+      json += "{\"nodeId\":\"" + node.nodeId + "\",\"bestRssi\":" + String(bestRssi)
+           + ",\"bestSnr\":" + String(bestSnr, 2) + ",\"history\":[";
 
       bool firstSample = true;
       for (const auto &sample : node.history) {
         uint64_t ageMs = now - sample.timestamp;
-        // Skip old samples AND skip zero-RSSI samples
         if (ageMs <= ONE_DAY && sample.rssi != 0) {
           if (!firstSample) json += ",";
           firstSample = false;
@@ -1548,7 +1667,7 @@ server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
 
           json += "{\"timestamp\":\"" + relativeTime
                + "\",\"rssi\":" + String(sample.rssi)
-               + ",\"snr\":" + String(sample.snr,2) + "}";
+               + ",\"snr\":" + String(sample.snr, 2) + "}";
         }
       }
       json += "]}";
