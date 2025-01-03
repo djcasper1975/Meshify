@@ -1,4 +1,6 @@
 THIS ACCOUNT WILL BE CLOSED ON THE 30TH I DONT USE 2 STEP VERIFICATIONS. SO I MAY USE [MARKCOULTOUS.COM](https://markcparanormal.com/) until i create a website for this project. there will be no more codes given only releases
+there's also a Facebook group here.
+https://www.facebook.com/groups/903502501920003/?ref=share  this is where updates will be posted. sorry but I'm forced to leave github.
 
 Meshify has the potential to be a powerful tool that brings together the best of mesh networking and LoRa communication, offering users a unique and versatile experience. Here’s why you should be excited to try it out:
 
