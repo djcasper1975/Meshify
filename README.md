@@ -25,7 +25,7 @@ Try it and experience the future of wireless connectivity—whether you choose t
 
 Mark Coultous (djcasper1975)
 
-You can install/flash direct to your device from these links below.
+You can install/flash direct to your device from these links below no software required.
 https://djcasper1975.github.io/Meshify/ESP32VroomFlash.html
 https://djcasper1975.github.io/Meshify/HeltecV3flash.html
 
