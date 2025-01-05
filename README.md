@@ -1,7 +1,3 @@
-THIS ACCOUNT WILL BE CLOSED ON THE 30TH I DONT USE 2 STEP VERIFICATIONS. SO I MAY USE [MARKCOULTOUS.COM](https://markcparanormal.com/) until i create a website for this project. there will be no more codes given only releases
-there's also a Facebook group here.
-https://www.facebook.com/groups/903502501920003/?ref=share  this is where updates will be posted. sorry but I'm forced to leave github.
-
 Meshify has the potential to be a powerful tool that brings together the best of mesh networking and LoRa communication, offering users a unique and versatile experience. Here’s why you should be excited to try it out:
 
 Two Versions to Fit Your Needs:
@@ -28,4 +24,8 @@ Try it and experience the future of wireless connectivity—whether you choose t
 
 
 Mark Coultous (djcasper1975)
-GitHub: djcasper1975
+
+You can install/flash direct to your device from these links below.
+https://djcasper1975.github.io/Meshify/ESP32VroomFlash.html
+https://djcasper1975.github.io/Meshify/HeltecV3flash.html
+
