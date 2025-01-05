@@ -1,0 +1,21 @@
+{
+    "name": "Meshify Heltec V3 Lora 32",
+    "new_install_prompt_erase": true,
+    "builds": [
+      {
+        "chipFamily": "ESP32-S3",
+          "improv": false,
+        "parts": [
+          { "path": "Meshify-Heltec_Lora_32_V3.ino.bin", "offset": 65536 },
+          { "path": "Meshify-Heltec_Lora_32_V3.ino.bootloader.bin", "offset": 0 },
+          { "path": "Meshify-Heltec_Lora_32_V3.ino.partitions.bin", "offset": 32768 }
+        ]
+      },
+      {
+        "chipFamily": "ESP8266",
+        "parts": [
+          { "path": "esp8266/SerialHelloWorld.ino.bin", "offset": 0 }
+        ]
+      }
+    ]
+  }
