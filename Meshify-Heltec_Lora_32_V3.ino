@@ -1,9 +1,13 @@
-//Test v1.00.005
-//20-12-2024
+//Test v1.00.006
+//24-01-2025
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
-//Improved Metrics Page to show best rssi snr.
-//Fixed wifi only node messages showing numbers instead of converted node id.
-//Moved navigation to top of node and hostory page.
+//EU868 Band P (869.4 MHz - 869.65 MHz): 10%, 500 mW ERP (10% 24hr 8640 seconds = 6 mins per hour TX Time.)
+//After Accounting for Heartbeats: 20 sec after boot then every 15 mins therafter.
+//Per Hour: 136 Max Char messages within the 6-minute (360,000 ms) duty cycle
+//Per Day: 3,296 Max Char messages within the 8,640,000 ms (10% duty cycle) allowance
+//checks if any rf from other nodes before tx
+//changed node text for lora to show direct nodes seen.
+// added node metrics page links to lora node list
 ////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  I  FFFF Y   Y //
 // MM  MM  E      S      H   H  I  F     Y Y  //
@@ -455,55 +459,75 @@ void displayCarousel() {
 long lastTxTimeMillisVar = -1;
 
 void transmitWithDutyCycle(const String& message) {
-  if (millis() < loRaTransmitDelay) {
-    Serial.println("[LoRa Tx] LoRa delay not expired, waiting...");
-    return;
-  }
-
-  int separatorIndex = message.indexOf('|');
-  if (separatorIndex == -1) {
-    Serial.println("[LoRa Tx] Invalid format.");
-    return;
-  }
-  String messageID = message.substring(0, separatorIndex);
-
-  auto& status = messageTransmissions[messageID];
-  if (status.transmittedViaLoRa) {
-    Serial.println("[LoRa Tx] Already sent via LoRa, skipping...");
-    return;
-  }
-
-  if (isDutyCycleAllowed()) {
-    tx_time = millis();
-    Serial.printf("[LoRa Tx] Transmitting: %s\n", message.c_str());
-
-    heltec_led(50);
-    int transmitStatus = radio.transmit(message.c_str());
-    tx_time = millis() - tx_time;
-    heltec_led(0);
-
-    if (transmitStatus == RADIOLIB_ERR_NONE) {
-      Serial.printf("[LoRa Tx] Sent OK (%i ms)\n", (int)tx_time);
-      status.transmittedViaLoRa = true;
-
-      calculateDutyCyclePause(tx_time);
-      last_tx = millis();
-      drawMainScreen(tx_time);
-
-      delay(200);
-      radio.startReceive();
-
-      if (!message.startsWith("HEARTBEAT|")) {
-        transmitViaWiFi(message);
-      }
-    } else {
-      Serial.printf("[LoRa Tx] Failed (%i)\n", transmitStatus);
+    // Check if the LoRa transmit delay has expired
+    if (millis() < loRaTransmitDelay) {
+        Serial.println("[LoRa Tx] LoRa delay not expired, waiting...");
+        return;
     }
-  } else {
-    Serial.printf("[LoRa Tx] Duty cycle limit reached, wait %i sec.\n",
-                  (int)((minimum_pause - (millis() - last_tx)) / 1000) + 1);
-  }
+
+    // Extract message ID for tracking
+    int separatorIndex = message.indexOf('|');
+    if (separatorIndex == -1) {
+        Serial.println("[LoRa Tx] Invalid message format.");
+        return;
+    }
+    String messageID = message.substring(0, separatorIndex);
+
+    // Check if the message has already been transmitted
+    auto& status = messageTransmissions[messageID];
+    if (status.transmittedViaLoRa) {
+        Serial.println("[LoRa Tx] Message already sent via LoRa, skipping...");
+        return;
+    }
+
+    // Check duty cycle compliance
+    if (isDutyCycleAllowed()) {
+        // Check if any incoming packets are being received
+        if (radio.available()) {
+            Serial.println("[LoRa Tx] Currently receiving a packet. Delaying transmission...");
+            loRaTransmitDelay = millis() + 500; // Short delay to allow RX to complete
+            return;
+        }
+
+        // Not receiving, proceed with transmission
+        tx_time = millis(); // Start transmission timer
+        Serial.printf("[LoRa Tx] Transmitting: %s\n", message.c_str());
+
+        heltec_led(50); // Turn on LED to indicate transmission
+        int transmitStatus = radio.transmit(message.c_str());
+        tx_time = millis() - tx_time; // Calculate transmission time
+        heltec_led(0); // Turn off LED
+
+        if (transmitStatus == RADIOLIB_ERR_NONE) {
+            // Transmission successful
+            Serial.printf("[LoRa Tx] Sent successfully (%i ms)\n", (int)tx_time);
+            status.transmittedViaLoRa = true;
+
+            // Update duty cycle delay
+            calculateDutyCyclePause(tx_time);
+            last_tx = millis(); // Update last transmission time
+            drawMainScreen(tx_time); // Refresh display
+
+            // Start receiving mode again
+            delay(200);
+            radio.startReceive();
+
+            // If the message is not a heartbeat, also send via WiFi
+            if (!message.startsWith("HEARTBEAT|")) {
+                transmitViaWiFi(message);
+            }
+        } else {
+            // Transmission failed
+            Serial.printf("[LoRa Tx] Transmission failed with error code: %i\n", transmitStatus);
+        }
+    } else {
+        // If duty cycle limits are reached, delay the next attempt
+        Serial.printf("[LoRa Tx] Duty cycle limit reached. Wait %i seconds.\n",
+                      (int)((minimum_pause - (millis() - last_tx)) / 1000) + 1);
+    }
 }
+
+
 
 unsigned long lastHeartbeatTime = 0;
 const unsigned long firstHeartbeatDelay = 20000; // 20 seconds for first heartbeat
@@ -589,7 +613,7 @@ void loop() {
 
   mesh.update();
 
-    // Send the first heartbeat after 20 seconds, then subsequent heartbeats every 15 minutes
+  // Send the first heartbeat after 20 seconds, then subsequent heartbeats every 15 minutes
   if (millis() - lastHeartbeatTime >= firstHeartbeatDelay && lastHeartbeatTime == 0) {
     sendHeartbeat();
     lastHeartbeatTime = millis();  // After the first heartbeat, set the lastHeartbeatTime
@@ -694,8 +718,6 @@ void loop() {
                   } else {
                     Serial.println("[LoRa Nodes] RelayID is own node, not updating.");
                   }
-
-
                   // *** END METRICS HISTORY CHANGES ***
                 }
               }
@@ -792,7 +814,7 @@ void receivedCallback(uint32_t from, String& message) {
 
   // **Convert relayID to custom format if necessary**
   if (!relayID.startsWith("!M")) {
-    // Attempt to convert numeric relayID to custom format
+    // Attempt to convert numericRelayId to custom format
     uint32_t numericRelayId = relayID.toInt();
     relayID = getCustomNodeId(numericRelayId);
     Serial.printf("[WiFi Rx] Converted relayID to custom format: %s\n", relayID.c_str());
@@ -827,27 +849,6 @@ void receivedCallback(uint32_t from, String& message) {
     scheduleLoRaTransmission(message);
   }
 
-  // **Update LoRa Node Metrics Based on relayID**
-  uint64_t currentTime = millis();
-  if (relayID != getCustomNodeId(getNodeId())) {
-    // Update or add the relay node in the LoRa nodes map
-    LoRaNode& relayNode = loraNodes[relayID];
-    relayNode.nodeId = relayID;
-    relayNode.lastRSSI = radio.getRSSI();
-    relayNode.lastSNR = radio.getSNR();
-    relayNode.lastSeen = currentTime;
-
-    // Add a new metrics sample
-    NodeMetricsSample sample = {currentTime, radio.getRSSI(), radio.getSNR()};
-    relayNode.history.push_back(sample);
-    if (relayNode.history.size() > 60) {
-      relayNode.history.erase(relayNode.history.begin());
-    }
-
-    Serial.printf("[LoRa Nodes] Updated/Added node: %s\n", relayID.c_str());
-  } else {
-    Serial.println("[LoRa Nodes] RelayID is own node, not updating.");
-  }
 }
 
 const char mainPageHtml[] PROGMEM = R"rawliteral(
@@ -1053,89 +1054,89 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       });
     }
 
-function fetchData() {
-  fetch('/messages')
-    .then(response => response.json())
-    .then(data => {
-      deviceCurrentTime = data.currentDeviceTime;
+    function fetchData() {
+      fetch('/messages')
+        .then(response => response.json())
+        .then(data => {
+          deviceCurrentTime = data.currentDeviceTime;
 
-      const ul = document.getElementById('messageList');
-      ul.innerHTML = '';
+          const ul = document.getElementById('messageList');
+          ul.innerHTML = '';
 
-      const currentNodeId = localStorage.getItem('nodeId');
+          const currentNodeId = localStorage.getItem('nodeId');
 
-      data.messages.forEach(msg => {
-        const li = document.createElement('li');
-        li.classList.add('message');
+          data.messages.forEach(msg => {
+            const li = document.createElement('li');
+            li.classList.add('message');
 
-        const isSentByCurrentNode = msg.nodeId === currentNodeId;
-        if (isSentByCurrentNode) {
-          li.classList.add('sent');
-        } else {
-          li.classList.add('received');
-          if (msg.source === '[LoRa]') {
-            li.classList.add('lora');
-          } else {
-            li.classList.add('wifi');
-          }
-        }
+            const isSentByCurrentNode = msg.nodeId === currentNodeId;
+            if (isSentByCurrentNode) {
+              li.classList.add('sent');
+            } else {
+              li.classList.add('received');
+              if (msg.source === '[LoRa]') {
+                li.classList.add('lora');
+              } else {
+                li.classList.add('wifi');
+              }
+            }
 
-        const messageAgeMillis = deviceCurrentTime - msg.timeReceived;
-        const messageAgeSeconds = Math.floor(messageAgeMillis / 1000);
+            const messageAgeMillis = deviceCurrentTime - msg.timeReceived;
+            const messageAgeSeconds = Math.floor(messageAgeMillis / 1000);
 
-        let timestamp = '';
-        if (messageAgeSeconds < 60) {
-          timestamp = `${messageAgeSeconds} sec ago`;
-        } else if (messageAgeSeconds < 3600) {
-          const minutes = Math.floor(messageAgeSeconds / 60);
-          timestamp = `${minutes} min ago`;
-        } else if (messageAgeSeconds < 86400) {
-          const hours = Math.floor(messageAgeSeconds / 3600);
-          const minutes = Math.floor((messageAgeSeconds % 3600) / 60);
-          if (minutes > 0) {
-            timestamp = `${hours} hr ${minutes} min ago`;
-          } else {
-            timestamp = `${hours} hr ago`;
-          }
-        } else if (messageAgeSeconds < 604800) {
-          const days = Math.floor(messageAgeSeconds / 86400);
-          timestamp = `${days} day${days > 1 ? 's' : ''} ago`;
-        } else if (messageAgeSeconds < 2592000) {
-          const weeks = Math.floor(messageAgeSeconds / 604800);
-          timestamp = `${weeks} week${weeks > 1 ? 's' : ''} ago`;
-        } else if (messageAgeSeconds < 31536000) {
-          const months = Math.floor(messageAgeSeconds / 2592000);
-          timestamp = `${months} month${months > 1 ? 's' : ''} ago`;
-        } else {
-          const years = Math.floor(messageAgeSeconds / 31536000);
-          timestamp = `${years} year${years > 1 ? 's' : ''} ago`;
-        }
+            let timestamp = '';
+            if (messageAgeSeconds < 60) {
+              timestamp = `${messageAgeSeconds} sec ago`;
+            } else if (messageAgeSeconds < 3600) {
+              const minutes = Math.floor(messageAgeSeconds / 60);
+              timestamp = `${minutes} min ago`;
+            } else if (messageAgeSeconds < 86400) {
+              const hours = Math.floor(messageAgeSeconds / 3600);
+              const minutes = Math.floor((messageAgeSeconds % 3600) / 60);
+              if (minutes > 0) {
+                timestamp = `${hours} hr ${minutes} min ago`;
+              } else {
+                timestamp = `${hours} hr ago`;
+              }
+            } else if (messageAgeSeconds < 604800) {
+              const days = Math.floor(messageAgeSeconds / 86400);
+              timestamp = `${days} day${days > 1 ? 's' : ''} ago`;
+            } else if (messageAgeSeconds < 2592000) {
+              const weeks = Math.floor(messageAgeSeconds / 604800);
+              timestamp = `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+            } else if (messageAgeSeconds < 31536000) {
+              const months = Math.floor(messageAgeSeconds / 2592000);
+              timestamp = `${months} month${months > 1 ? 's' : ''} ago`;
+            } else {
+              const years = Math.floor(messageAgeSeconds / 31536000);
+              timestamp = `${years} year${years > 1 ? 's' : ''} ago`;
+            }
 
-        const nodeIdHtml = `Node Id: ${msg.nodeId}`;
-        const senderHtml = `<strong>${msg.sender || 'Unknown'}:</strong> `;
-        let relayIdHtml = '';
-        if (msg.relayID && msg.relayID !== currentNodeId) {
-          relayIdHtml = `<span class="message-relayid">Relay ID: ${msg.relayID}</span>`;
-        }
+            const nodeIdHtml = `Node Id: ${msg.nodeId}`;
+            const senderHtml = `<strong>${msg.sender || 'Unknown'}:</strong> `;
+            let relayIdHtml = '';
+            if (msg.relayID && msg.relayID !== currentNodeId) {
+              relayIdHtml = `<span class="message-relayid">Relay ID: ${msg.relayID}</span>`;
+            }
 
-        let rssiSnrHtml = '';
-        if (msg.source === '[LoRa]' && msg.rssi !== undefined && msg.snr !== undefined) {
-          rssiSnrHtml = `<span class="message-rssi-snr">RSSI: ${msg.rssi} dBm, SNR: ${msg.snr} dB</span>`;
-        }
+            let rssiSnrHtml = '';
+            if (msg.source === '[LoRa]' && msg.rssi !== undefined && msg.snr !== undefined) {
+              rssiSnrHtml = `<span class="message-rssi-snr">RSSI: ${msg.rssi} dBm, SNR: ${msg.snr} dB</span>`;
+            }
 
-        li.innerHTML = `
-          <span class="message-nodeid">${nodeIdHtml}</span>
-          <div class="message-content">${senderHtml}${msg.content}</div>
-          ${relayIdHtml}
-          <span class="message-time">${timestamp}</span>
-          ${rssiSnrHtml}
-        `;
-        ul.appendChild(li);
-      });
+            li.innerHTML = `
+              <span class="message-nodeid">${nodeIdHtml}</span>
+              <div class="message-content">${senderHtml}${msg.content}</div>
+              ${relayIdHtml}
+              <span class="message-time">${timestamp}</span>
+              ${rssiSnrHtml}
+            `;
+            ul.appendChild(li);
+          });
 
-      ul.scrollTop = ul.scrollHeight;
-    })
-    .catch(error => console.error('Error fetching messages:', error));
+          ul.scrollTop = ul.scrollHeight;
+        })
+        .catch(error => console.error('Error fetching messages:', error));
 
       fetch('/deviceCount')
         .then(response => response.json())
@@ -1185,6 +1186,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meshify Nodes</title>
   <style>
     body { 
       font-family: Arial, sans-serif; 
@@ -1197,37 +1199,22 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
       color: #333; 
       margin-top: 20px;
     }
-    h3 {
-      color: #333; 
-      margin-top: 20px;
-      text-align: left;
-      max-width: 500px;
-      margin-left: auto;
-      margin-right: auto;
-    }
     ul { 
       list-style-type: none; 
       padding: 0; 
       margin: 10px auto; 
-      max-width: 500px; 
+      max-width: 600px; 
     }
     .node {
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: flex-start;
-      margin: 10px 0;
-      padding: 15px;
-      border-radius: 10px;
-      width: 100%;
-      max-width: 500px;
-      box-sizing: border-box;
+      background-color: #fff;
       border: 2px solid;
+      border-radius: 10px;
+      padding: 15px;
+      margin: 10px 0;
       text-align: left;
       font-size: 0.85em;
       color: #333;
-      font-weight: normal;
-      background-color: #fff;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     }
     .node.wifi {
       background-color: #e7f0ff;
@@ -1237,24 +1224,55 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
       background-color: #fff4e0;
       border-color: orange;
     }
-    #nodeCount { 
-      margin: 20px auto; 
-      max-width: 500px; 
-      font-weight: bold;
-      text-align: left;
+    .node-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
     }
-    a {
-      margin-top: 20px;
-      display: inline-block;
+    .node-header strong {
+      font-size: 1em;
+    }
+    .node-header a {
       text-decoration: none;
       color: #007bff;
       font-weight: bold;
     }
-    a:hover {
+    .node-header a:hover {
       text-decoration: underline;
+    }
+    .node-info {
+      margin-left: 20px;
+      font-size: 0.9em;
+    }
+    #nodeCount { 
+      margin: 20px auto; 
+      max-width: 600px; 
+      font-weight: bold;
+      text-align: left;
     }
     .node-section {
       margin-bottom: 30px;
+    }
+    /* Responsive Design */
+    @media (max-width: 600px) {
+      .node-info {
+        margin-left: 0;
+      }
+    }
+    /* Navigation Links */
+    .nav-links {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .nav-links a {
+      margin: 0 15px;
+      text-decoration: none;
+      color: #007bff;
+      font-weight: bold;
+    }
+    .nav-links a:hover {
+      text-decoration: underline;
     }
   </style>
   <script>
@@ -1275,20 +1293,33 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
           data.wifiNodes.forEach((node, index) => {
             const li = document.createElement('li');
             li.classList.add('node', 'wifi');
-            li.textContent = 'Node ' + (index + 1) + ': ' + node;
+            li.innerHTML = `
+              <div class="node-header">
+                <strong>Node ${index + 1}:</strong>
+                <span>${node}</span>
+              </div>
+              <div class="node-info">
+                <!-- Add any additional WiFi node info here if needed -->
+              </div>
+            `;
             wifiUl.appendChild(li);
           });
 
           // Update LoRa Nodes list
           const loraCount = data.loraNodes.length;
-          document.getElementById('loraCount').innerText = 'LoRa Nodes Active: ' + loraCount;
+          document.getElementById('loraCount').innerText = 'Direct LoRa Nodes Active: ' + loraCount;
           data.loraNodes.forEach((node, index) => {
             const li = document.createElement('li');
             li.classList.add('node', 'lora');
-            li.innerHTML = ` 
-              <strong>Node ${index + 1}:</strong> ${node.nodeId}<br>
-              RSSI: ${node.lastRSSI} dBm, SNR: ${node.lastSNR} dB<br>
-              Last seen: ${node.lastSeen}
+            li.innerHTML = `
+              <div class="node-header">
+                <strong>Node ${index + 1}:</strong>
+                <a href="/loraDetails?nodeId=${encodeURIComponent(node.nodeId)}">${node.nodeId}</a>
+              </div>
+              <div class="node-info">
+                RSSI: ${node.lastRSSI} dBm, SNR: ${node.lastSNR} dB<br>
+                Last seen: ${node.lastSeen}
+              </div>
             `;
             loraUl.appendChild(li);
           });
@@ -1303,9 +1334,11 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
   </script>
 </head>
 <body>
-   <a href="/">Back</a> | <a href="/metrics">History</a>
+  <div class="nav-links">
+    <a href="/">Back</a> | <a href="/metrics">History</a>
+  </div>
   <h2>Meshify Nodes</h2>
-   
+  
   <!-- Node count for WiFi -->
   <div class="node-section">
     <span id="wifiCount">WiFi Nodes Connected: 0</span>
@@ -1314,7 +1347,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 
   <!-- Node count for LoRa -->
   <div class="node-section">
-    <span id="loraCount">LoRa Nodes Active: 0</span>
+    <span id="loraCount">Direct LoRa Nodes Active: 0</span>
     <ul id="loraNodeList"></ul>
   </div>
 </body>
@@ -1502,7 +1535,6 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-
 /**
  * Helper function to convert an elapsed time in milliseconds 
  * into a human-readable relative time string.
@@ -1537,6 +1569,21 @@ String formatRelativeTime(uint64_t ageMs) {
   }
 }
 
+// ----------------------------------------------------------------------------
+// NEW HELPER to filter messages for a given nodeId
+// We consider the node the "origin" (msg.nodeId == nodeId) or the "relay" (msg.relayID == nodeId).
+// ----------------------------------------------------------------------------
+std::vector<Message> getNodeMessages(const String& nodeId) {
+  std::vector<Message> result;
+  for (auto &m : messages) {
+    // If the node was either the origin or the relay
+    if (m.nodeId == nodeId || m.relayID == nodeId) {
+      result.push_back(m);
+    }
+  }
+  return result;
+}
+
 void setupServerRoutes() {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
     serveHtml(request, mainPageHtml);
@@ -1567,34 +1614,34 @@ void setupServerRoutes() {
     request->send(200, "application/json", "{\"totalCount\":" + String(getNodeCount()) + ", \"nodeId\":\"" + getCustomNodeId(getNodeId()) + "\"}");
   });
 
-server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest* request) {
-  updateMeshData();
-  String json = "{\"wifiNodes\":[";
-  auto wifiNodeList = mesh.getNodeList();
-  bool firstWifi = true;
-  for (auto node : wifiNodeList) {
-      if (!firstWifi) json += ",";
-      json += "\"" + getCustomNodeId(node) + "\"";
-      firstWifi = false;
-  }
-  json += "], \"loraNodes\":[";
+  server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest* request) {
+    updateMeshData();
+    String json = "{\"wifiNodes\":[";
+    auto wifiNodeList = mesh.getNodeList();
+    bool firstWifi = true;
+    for (auto node : wifiNodeList) {
+        if (!firstWifi) json += ",";
+        json += "\"" + getCustomNodeId(node) + "\"";
+        firstWifi = false;
+    }
+    json += "], \"loraNodes\":[";
 
-  bool firstLora = true;
-  uint64_t currentTime = millis();
-  const uint64_t FIFTEEN_MINUTES = 900000; // 15 minutes in milliseconds
-  for (auto const& [nodeId, loraNode] : loraNodes) {
-      uint64_t lastSeenTime = loraNode.lastSeen;
-      if (currentTime - lastSeenTime <= FIFTEEN_MINUTES) {  // Only include nodes seen in the last 15 minutes
-          if (!firstLora) json += ",";
-          json += "{\"nodeId\":\"" + nodeId + "\",\"lastRSSI\":" + String(loraNode.lastRSSI)
-                + ",\"lastSNR\":" + String(loraNode.lastSNR, 2)
-                + ",\"lastSeen\":\"" + formatRelativeTime(currentTime - lastSeenTime) + "\"}";
-          firstLora = false;
-      }
-  }
-  json += "]}";
-  request->send(200, "application/json", json);
-});
+    bool firstLora = true;
+    uint64_t currentTime = millis();
+    const uint64_t FIFTEEN_MINUTES = 900000; // 15 minutes in milliseconds
+    for (auto const& [nodeId, loraNode] : loraNodes) {
+        uint64_t lastSeenTime = loraNode.lastSeen;
+        if (currentTime - lastSeenTime <= FIFTEEN_MINUTES) {  // Only include nodes seen in the last 15 minutes
+            if (!firstLora) json += ",";
+            json += "{\"nodeId\":\"" + nodeId + "\",\"lastRSSI\":" + String(loraNode.lastRSSI)
+                  + ",\"lastSNR\":" + String(loraNode.lastSNR, 2)
+                  + ",\"lastSeen\":\"" + formatRelativeTime(currentTime - lastSeenTime) + "\"}";
+            firstLora = false;
+        }
+    }
+    json += "]}";
+    request->send(200, "application/json", json);
+  });
 
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest* request) {
     String newMessage = "";
@@ -1628,7 +1675,7 @@ server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest* request) {
   });
 
   // Return only the last hour of samples, converting timestamp to relative time
-server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
+  server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
     uint64_t now = millis();
     const uint64_t ONE_DAY = 86400000;
     String json = "{\"loraNodes\":[";
@@ -1641,8 +1688,8 @@ server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
       const auto &node = kv.second;
 
       // Find Best RSSI and Best SNR independently
-      int bestRssi = node.history[0].rssi;
-      float bestSnr = node.history[0].snr;
+      int bestRssi = node.history.empty() ? node.lastRSSI : node.history[0].rssi;
+      float bestSnr = node.history.empty() ? node.lastSNR : node.history[0].snr;
 
       for (const auto &sample : node.history) {
         if (sample.rssi > bestRssi) {
@@ -1675,11 +1722,167 @@ server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
     json += "]}";
 
     request->send(200, "application/json", json);
-});
+  });
 
-  // *** END METRICS HISTORY CHANGES ***
+  // ---------------------------------------------------------------
+  // NEW PAGE: /loraDetails
+  // Lists all LoRa node IDs if nodeId is not provided.
+  // If ?nodeId= is provided, shows that node's metrics & messages.
+  // ---------------------------------------------------------------
+server.on("/loraDetails", HTTP_GET, [](AsyncWebServerRequest *request){
+  // Check if we have a query parameter "nodeId"
+  if(!request->hasParam("nodeId")) {
+    // Show a list of LoRa nodes
+    String html = 
+    "<!DOCTYPE html><html lang='en'><head>"
+    "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1.0'>"
+    "<title>LoRa Nodes List</title>"
+    "<style>"
+    "body { font-family: Arial, sans-serif; background-color: #f4f7f6; margin:0; padding:20px; }"
+    ".nav-links { text-align:center; margin-bottom:20px; background-color:#eee; padding:10px; }"
+    ".nav-links a { margin:0 15px; text-decoration:none; color:#007bff; font-weight:bold; }"
+    "h2 { text-align:center; color:#333; }"
+    ".node-list { max-width:600px; margin:10px auto; background:#fff; padding:10px; border-radius:8px; }"
+    ".node-link { display:block; padding:8px; border-bottom:1px solid #ccc; color:#007bff; text-decoration:none; }"
+    ".node-link:hover { background-color:#f0f0f0; }"
+    "</style>"
+    "</head><body>"
+    "<div class='nav-links'>"
+    "<a href='/'>Chat</a>"
+    "<a href='/nodes'>All Nodes</a>"
+    "<a href='/metrics'>Signal History</a>"
+    "</div>"
+    "<h2>LoRa Node Details</h2>"
+    "<p style='text-align:center;'>Select a LoRa node to see metrics and messages.</p>"
+    "<div class='node-list'>";
+
+    // Gather list of LoRa nodes (active in last 15 mins)
+    uint64_t currentTime = millis();
+    const uint64_t FIFTEEN_MINUTES = 900000;
+    bool anyLoRa = false;
+    for(auto &kv : loraNodes) {
+      if(currentTime - kv.second.lastSeen <= FIFTEEN_MINUTES) {
+        anyLoRa = true;
+        html += "<a class='node-link' href='/loraDetails?nodeId=" + kv.first + "'>"
+                + kv.first + "</a>";
+      }
+    }
+    if(!anyLoRa) {
+      html += "<p>No LoRa nodes seen in last 15 minutes.</p>";
+    }
+
+    html += "</div></body></html>";
+    request->send(200, "text/html", html);
+  } 
+  else {
+    // We have nodeId param, let's show that node's details
+    String nodeId = request->getParam("nodeId")->value();
+    LoRaNode *found = nullptr;
+    if(loraNodes.find(nodeId) != loraNodes.end()){
+      found = &loraNodes[nodeId];
+    }
+
+    String html =
+    "<!DOCTYPE html><html lang='en'><head>"
+    "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1.0'>"
+    "<title>LoRa Node " + nodeId + "</title>"
+    "<style>"
+    "body { font-family: Arial, sans-serif; background-color: #f4f7f6; margin:0; padding:20px; }"
+    ".nav-links { text-align:center; margin-bottom:20px; background-color:#eee; padding:10px; }"
+    ".nav-links a { margin:0 15px; text-decoration:none; color:#007bff; font-weight:bold; }"
+    "h2 { text-align:center; color:#333; }"
+    ".details { max-width:600px; margin:10px auto; background:#fff; padding:10px; border-radius:8px; }"
+    "table { border-collapse: collapse; width: 100%; margin-bottom: 10px; }"
+    "th, td { border: 1px solid #ccc; padding: 5px; text-align:left; font-size: 0.9em; }"
+    "th { background-color:#eee; }"
+    ".section-title { font-weight:bold; font-size:1.1em; margin-top:20px; }"
+    ".message-block { border:1px solid #ccc; margin:5px 0; padding:8px; border-radius:4px; }"
+    ".message-block h4 { margin:0; font-size:0.9em; }"
+    ".message-block p { margin:4px 0; font-size:0.85em; }"
+    "</style></head><body>";
+
+    html +=
+    "<div class='nav-links'>"
+    "<a href='/'>Chat</a>"
+    "<a href='/nodes'>Node List</a>"
+    "<a href='/metrics'>History</a>"
+    //"<a href='/loraDetails'>LoRa List</a>"
+    "</div>";
+
+    html += "<h2>LoRa Node: " + nodeId + "</h2>";
+
+    if(!found) {
+      // Node not found at all
+      html += "<div class='details'><p>No details available. This node hasn't been heard from or it's older than 24h.</p></div>";
+      html += "</body></html>";
+      request->send(200, "text/html", html);
+      return;
+    }
+
+    // If found, show current metrics
+    uint64_t ageMs = millis() - found->lastSeen;
+    String ageStr = formatRelativeTime(ageMs);
+
+    html += "<div class='details'>";
+    html += "<p><strong>Last RSSI:</strong> " + String(found->lastRSSI) + " dBm<br>";
+    html += "<strong>Last SNR:</strong> " + String(found->lastSNR) + " dB<br>";
+    html += "<strong>Last Seen:</strong> " + ageStr + "</p>";
+
+    // Rolling history table
+    const uint64_t ONE_DAY = 86400000;
+    bool anySample = false;
+    html += "<div class='section-title'>RSSI/SNR History (24hr)</div>";
+    html += "<table><thead><tr><th>Time Ago</th><th>RSSI (dBm)</th><th>SNR (dB)</th></tr></thead><tbody>";
+    for(auto &sample : found->history) {
+      uint64_t sampleAge = millis() - sample.timestamp;
+      if(sampleAge <= ONE_DAY) {
+        anySample = true;
+        html += "<tr>";
+        html += "<td>" + formatRelativeTime(sampleAge) + "</td>";
+        html += "<td>" + String(sample.rssi) + "</td>";
+        html += "<td>" + String(sample.snr,2) + "</td>";
+        html += "</tr>";
+      }
+    }
+    if(!anySample) {
+      html += "<tr><td colspan='3'>No samples in last 24 hours.</td></tr>";
+    }
+    html += "</tbody></table>";
+
+    // Show messages from this node
+    auto nodeMsgs = getNodeMessages(nodeId);
+    html += "<div class='section-title'>Messages Sent/Relayed</div>";
+    if(nodeMsgs.empty()) {
+      html += "<p>No messages from or through this node.</p>";
+    } else {
+      for(auto it = nodeMsgs.rbegin(); it != nodeMsgs.rend(); ++it) {
+        uint64_t msgAgeMs = millis() - it->timeReceived;
+        String msgAgeStr = formatRelativeTime(msgAgeMs);
+        html += "<div class='message-block'>";
+        html += "<h4>Sender: " + it->sender + " | NodeID: " + it->nodeId + "</h4>";
+        html += "<p><strong>Content:</strong> " + it->content + "</p>";
+        html += "<p><strong>Source:</strong> " + it->source + "</p>";
+        if(!it->relayID.isEmpty()) {
+          html += "<p><strong>RelayID:</strong> " + it->relayID + "</p>";
+        }
+        if(it->source == "[LoRa]") {
+          html += "<p><strong>RSSI:</strong> " + String(it->rssi) + " dBm, "
+                  "<strong>SNR:</strong> " + String(it->snr,2) + " dB</p>";
+        }
+        html += "<p><em>" + msgAgeStr + "</em></p>";
+        html += "</div>";
+      }
+    }
+
+    html += "</div></body></html>";
+    request->send(200, "text/html", html);
+  }
+});
+  // ---------------------------------------------------------------
+
 }
 
+// Serve static HTML from PROGMEM
 void serveHtml(AsyncWebServerRequest* request, const char* htmlContent) {
   request->send(200, "text/html", htmlContent);
 }
