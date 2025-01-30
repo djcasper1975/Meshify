@@ -1,35 +1,14 @@
-Meshmingle has the potential to be a powerful tool that brings together the best of mesh networking and LoRa communication, offering users a unique and versatile experience. Here’s why you should be excited to try it out:
+Meshmingle is a Free Homebrew mesh chat network that works through wifi and lora to extend range beyond your home.
+When conected to wifi via a mobile device open your browser and goto http://mesh.local to start chatting.
+setup is so easy you just power up your device after flashing and your good to go.
+Is recomended that you use a heltec v3 lora device and conect it to an outside antenna for longer range allthough not requred if many users are on the same network closeby.
+Each device acts as a relay so any messages sent will relay through all conected devices.
+you can get a heltec v3 lora (868) device from here.
+https://www.aliexpress.com/item/1005008177147021.html?spm=a2g0o.productlist.main.1.250eW1cdW1cdtv&algo_pvid=35bce395-957c-4d74-acae-a401475e1878&algo_exp_id=35bce395-957c-4d74-acae-a401475e1878-0&pdp_npi=4%40dis%21GBP%2192.65%2127.79%21%21%21813.44%21244.03%21%40210390c917382558805633373e4abb%2112000044119652166%21sea%21UK%21142596515%21X&curPageLogUid=0Y7GXyP3tzbd&utparam-url=scene%3Asearch%7Cquery_from%3A
+or search for heltec v3 lora.
 
-Two Versions to Fit Your Needs:
-ESP32 Version: If you need a robust, general-purpose wireless mesh network without LoRa, the standard ESP32 version is your go-to. Perfect for setting up quick, reliable connections among multiple nodes, it supports seamless communication across your network.
+You can install/flash direct to your device from these links below on your pc no software required (some browsers wont work). But you will need drivers for your device which you should have installed already. 
 
-Heltec LoRa 32 V3 Version: This version elevates your experience by integrating LoRa, a long-range, low-power communication technology. Imagine connecting devices that are miles apart! Plus, it comes with an OLED display, allowing you to monitor real-time status, data transmission, and network performance right on the device.
-
-You can install/flash direct to your device from these links below no software required.
-https://djcasper1975.github.io/Meshmingle/ESP32VroomFlash.html
 https://djcasper1975.github.io/Meshmingle/HeltecV3flash.html
 
-Why the Heltec Version Stands Out:
-Long-Range Connectivity: The integrated LoRa radio lets you send and receive data over much longer distances than traditional WiFi mesh, making it perfect for remote monitoring, outdoor projects, and IoT applications where standard WiFi might struggle.
-
-Duty Cycle Management: Designed to comply with LoRa transmission regulations, the app’s duty cycle management ensures your devices transmit only when allowed, preventing any disruptions in communication and enhancing battery life.
-
-Real-Time Display: The OLED screen gives you live updates on network status, duty cycle activity, and recent LoRa transmissions, providing a hands-on, interactive experience that keeps you in control.
-
-Powerful Networking with Meshify:
-Adaptive Mesh Network: Both versions use painlessMesh, a robust protocol that adapts as nodes connect or disconnect. This means your network remains reliable and efficient, even as devices move in and out of range.
-
-Integrated Web Server: Easily interact with your network through a built-in web interface. View messages, check node statuses, and manage your devices from any browser—no complex setups required!
-
-Perfect for Innovators and Tech Enthusiasts:
-Whether you're a hobbyist, a developer, or an innovator, this app is packed with features that encourage exploration and experimentation. From building smart cities to setting up remote weather stations, the possibilities are endless.
-
-Try it and experience the future of wireless connectivity—whether you choose the versatile ESP32 or the enhanced Heltec LoRa version with OLED display and long-range communication capabilities.
-
-
-Mark Coultous (djcasper1975)
-
-You can install/flash direct to your device from these links below no software required.
 https://djcasper1975.github.io/Meshmingle/ESP32VroomFlash.html
-https://djcasper1975.github.io/Meshmingle/HeltecV3flash.html
-
