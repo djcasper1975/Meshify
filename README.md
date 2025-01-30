@@ -16,6 +16,7 @@
         <h2>Flash Your Device</h2>
         <p>You can install/flash directly to your device from the links below using your PC. No additional software required (some browsers may not work; Chrome is recommended). Ensure you have the necessary drivers installed.</p>
         <a href="/HeltecV3flash.html" class="button">Flash Heltec V3</a>
+        <br>
         <a href="/ESP32VroomFlash.html" class="button">Flash ESP32 Vroom</a>
     </div>
 </body>
