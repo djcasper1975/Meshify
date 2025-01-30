@@ -1,4 +1,4 @@
-Meshify has the potential to be a powerful tool that brings together the best of mesh networking and LoRa communication, offering users a unique and versatile experience. Here’s why you should be excited to try it out:
+Meshmingle has the potential to be a powerful tool that brings together the best of mesh networking and LoRa communication, offering users a unique and versatile experience. Here’s why you should be excited to try it out:
 
 Two Versions to Fit Your Needs:
 ESP32 Version: If you need a robust, general-purpose wireless mesh network without LoRa, the standard ESP32 version is your go-to. Perfect for setting up quick, reliable connections among multiple nodes, it supports seamless communication across your network.
@@ -6,8 +6,8 @@ ESP32 Version: If you need a robust, general-purpose wireless mesh network witho
 Heltec LoRa 32 V3 Version: This version elevates your experience by integrating LoRa, a long-range, low-power communication technology. Imagine connecting devices that are miles apart! Plus, it comes with an OLED display, allowing you to monitor real-time status, data transmission, and network performance right on the device.
 
 You can install/flash direct to your device from these links below no software required.
-https://djcasper1975.github.io/Meshify/ESP32VroomFlash.html
-https://djcasper1975.github.io/Meshify/HeltecV3flash.html
+https://djcasper1975.github.io/Meshmingle/ESP32VroomFlash.html
+https://djcasper1975.github.io/Meshmingle/HeltecV3flash.html
 
 Why the Heltec Version Stands Out:
 Long-Range Connectivity: The integrated LoRa radio lets you send and receive data over much longer distances than traditional WiFi mesh, making it perfect for remote monitoring, outdoor projects, and IoT applications where standard WiFi might struggle.
@@ -30,6 +30,6 @@ Try it and experience the future of wireless connectivity—whether you choose t
 Mark Coultous (djcasper1975)
 
 You can install/flash direct to your device from these links below no software required.
-https://djcasper1975.github.io/Meshify/ESP32VroomFlash.html
-https://djcasper1975.github.io/Meshify/HeltecV3flash.html
+https://djcasper1975.github.io/Meshmingle/ESP32VroomFlash.html
+https://djcasper1975.github.io/Meshmingle/HeltecV3flash.html
 
