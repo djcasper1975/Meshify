@@ -6,9 +6,9 @@
         "chipFamily": "ESP32",
           "improv": false,
         "parts": [
-          { "path": "Meshmingle.ino.bin", "offset": 65536 },
-          { "path": "Meshmingle.ino.bootloader.bin", "offset": 4096 },
-          { "path": "Meshmingle.ino.partitions.bin", "offset": 32768 }
+          { "path": "Meshmingle-Esp32.ino.bin", "offset": 65536 },
+          { "path": "Meshmingle-Esp32.ino.bootloader.bin", "offset": 4096 },
+          { "path": "Meshmingle-Esp32.ino.partitions.bin", "offset": 32768 }
         ]
       },
       {
