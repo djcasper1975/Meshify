@@ -1,14 +1,14 @@
 {
-    "name": "Meshify ESP32VROOM",
+    "name": "Meshmingle ESP32VROOM",
     "new_install_prompt_erase": true,
     "builds": [
       {
         "chipFamily": "ESP32",
           "improv": false,
         "parts": [
-          { "path": "meshify.ino.bin", "offset": 65536 },
-          { "path": "meshify.ino.bootloader.bin", "offset": 4096 },
-          { "path": "meshify.ino.partitions.bin", "offset": 32768 }
+          { "path": "Meshmingle.ino.bin", "offset": 65536 },
+          { "path": "Meshmingle.ino.bootloader.bin", "offset": 4096 },
+          { "path": "Meshmingle.ino.partitions.bin", "offset": 32768 }
         ]
       },
       {
