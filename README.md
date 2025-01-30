@@ -14,6 +14,7 @@
         <a href="https://www.aliexpress.com/item/1005008177147021.html" class="button" target="_blank">Buy Heltec V3 LoRa</a>
         <h2>Flash Your Device</h2>
          <img src="heltecv3.jpg" alt="heltec v3 device" width="300" height="200">
+        <img src="Esp32Vroom.jpg" alt="Esp32 Vroom device" width="300" height="200">
         <p>You can install/flash directly to your device from the links below using your PC. No additional software required (some browsers may not work; Chrome is recommended). Ensure you have the necessary drivers installed.</p>
         <a href="/HeltecV3flash.html" class="button">Flash Heltec V3</a>
         <br>
