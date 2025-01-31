@@ -1,13 +1,11 @@
-//Test v1.00.006
-//30-01-2025
+//Test v1.00.002
+//31-01-2025
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
 //EU868 Band P (869.4 MHz - 869.65 MHz): 10%, 500 mW ERP (10% 24hr 8640 seconds = 6 mins per hour TX Time.)
 //After Accounting for Heartbeats: 20 sec after boot then every 15 mins therafter.
 //Per Hour: 136 Max Char messages within the 6-minute (360,000 ms) duty cycle
 //Per Day: 3,296 Max Char messages within the 8,640,000 ms (10% duty cycle) allowance
-//checks if any rf from other nodes before tx
-//changed node text for lora to show direct nodes seen.
-//Renamed Project To a More unique Name.
+//changes network name to meshmingle.co.uk so people can find the site and see how it works.
 ////////////////////////////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  M    M  I  N   N  GGGGG  L      EEEEE //
 // MM  MM  E      S      H   H  MM  MM  I  NN  N  G      L      E     //
@@ -90,7 +88,7 @@ void calculateDutyCyclePause(uint64_t tx_time) {
 
 
 // Meshmingle Parameters
-#define MESH_SSID "Meshmingle 1.0"
+#define MESH_SSID "meshmingle.co.uk"
 #define MESH_PASSWORD ""  
 #define MESH_PORT 5555
 const int maxMessages = 50;

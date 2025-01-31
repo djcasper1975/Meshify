@@ -1,7 +1,7 @@
-//Test v1.00.006
-//30-01-2025
+//Test v1.00.002
+//31-01-2025
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
-//Fixed node id conversion from numbers to max 8 digit chats starting with !M
+//Changed network name.
 ////////////////////////////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  M    M  I  N   N  GGGGG  L      EEEEE //
 // MM  MM  E      S      H   H  MM  MM  I  NN  N  G      L      E     //
@@ -69,7 +69,7 @@ void calculateDutyCyclePause(uint64_t tx_time) {
 }
 
 // Meshmingle Parameters
-#define MESH_SSID "Meshmingle 1.0"
+#define MESH_SSID "Meshmingle.co.uk"
 #define MESH_PASSWORD ""  
 #define MESH_PORT 5555
 const int maxMessages = 50;
