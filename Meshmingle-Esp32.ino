@@ -1,7 +1,8 @@
 //Test v1.00.002
-//31-01-2025
+//01-02-2025
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
 //Changed network name.
+//added private messages to other nodes.
 ////////////////////////////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  M    M  I  N   N  GGGGG  L      EEEEE //
 // MM  MM  E      S      H   H  MM  MM  I  NN  N  G      L      E     //
@@ -24,7 +25,7 @@ void setupServerRoutes();
 void updateMeshData();
 String formatRelativeTime(uint64_t ageMs);
 void serveHtml(AsyncWebServerRequest* request, const char* htmlContent);
-void addMessage(const String& nodeId, const String& messageID, const String& sender, String content, const String& source, const String& relayID, int rssi = 0, float snr = 0.0);
+void addMessage(const String& nodeId, const String& messageID, const String& sender, const String& recipient, String content, const String& source, const String& relayID, int rssi = 0, float snr = 0.0);
 void sendHeartbeat();
 void cleanupLoRaNodes();
 void transmitViaWiFi(const String& message);
@@ -61,15 +62,14 @@ void calculateDutyCyclePause(uint64_t tx_time) {
     }
 
     if (cumulativeTxTime >= DUTY_CYCLE_LIMIT_MS) {
-        // Implement duty cycle pause logic if needed
-        Serial.printf("[Duty Cycle] Duty cycle limit reached, waiting for %llu ms.\n", (uint64_t)0); // Replace 0 with actual pause if necessary
+        Serial.printf("[Duty Cycle] Duty cycle limit reached, waiting...\n");
     } else {
         Serial.printf("[Duty Cycle] Duty cycle time used: %llu ms.\n", cumulativeTxTime);
     }
 }
 
 // Meshmingle Parameters
-#define MESH_SSID "Meshmingle.co.uk"
+#define MESH_SSID "meshmingle.co.uk"
 #define MESH_PASSWORD ""  
 #define MESH_PORT 5555
 const int maxMessages = 50;
@@ -83,9 +83,11 @@ AsyncWebServer server(80);
 DNSServer dnsServer;
 painlessMesh mesh;
 
+// Updated Message structure (added recipient)
 struct Message {
   String nodeId;     
   String sender;
+  String recipient;  // NEW field for private messages (or "ALL" for public)
   String content;
   String source;     
   String messageID;  
@@ -103,6 +105,7 @@ uint32_t currentNodeId = 0;
 unsigned long loRaTransmitDelay = 0; 
 unsigned long messageCounter = 0;
 
+// Returns a custom formatted node id, e.g., "!Mxxxxxx"
 String getCustomNodeId(uint32_t nodeId) {
     String hexNodeId = String(nodeId, HEX);
     while (hexNodeId.length() < 6) {
@@ -133,8 +136,12 @@ uint16_t crc16_ccitt(const uint8_t *buf, size_t len) {
   return crc;
 }
 
-String constructMessage(const String& messageID, const String& originatorID, const String& sender, const String& content, const String& relayID) {
-  String messageWithoutCRC = messageID + "|" + originatorID + "|" + sender + "|" + content + "|" + relayID;
+// -----------------------------------------------------------------------------
+// Updated constructMessage() with recipient field.
+// Format: messageID|originatorID|sender|recipient|content|relayID|CRC
+// -----------------------------------------------------------------------------
+String constructMessage(const String& messageID, const String& originatorID, const String& sender, const String& recipient, const String& content, const String& relayID) {
+  String messageWithoutCRC = messageID + "|" + originatorID + "|" + sender + "|" + recipient + "|" + content + "|" + relayID;
   uint16_t crc = crc16_ccitt((const uint8_t *)messageWithoutCRC.c_str(), messageWithoutCRC.length());
   char crcStr[5];
   sprintf(crcStr, "%04X", crc);
@@ -154,8 +161,6 @@ struct LoRaNode {
   int lastRSSI;
   float lastSNR;
   uint64_t lastSeen;
-
-  // Rolling history of signal metrics (RSSI, SNR, timestamp).
   std::vector<NodeMetricsSample> history; 
 };
 
@@ -167,8 +172,7 @@ const unsigned long cleanupInterval = 60000; // 1 minute
 
 void cleanupLoRaNodes() {
   uint64_t currentTime = millis();
-  const uint64_t timeout = 86400000; // 24 hours node is removed if not seen
-
+  const uint64_t timeout = 86400000; // 24 hours
   for (auto it = loraNodes.begin(); it != loraNodes.end();) {
     if (currentTime - it->second.lastSeen > timeout) {
       Serial.printf("[LoRa Nodes] Removing inactive LoRa node: %s\n", it->first.c_str());
@@ -179,7 +183,10 @@ void cleanupLoRaNodes() {
   }
 }
 
-void addMessage(const String& nodeId, const String& messageID, const String& sender, String content, const String& source, const String& relayID, int rssi, float snr) {
+// -----------------------------------------------------------------------------
+// Updated addMessage() to include recipient and only add private messages if intended.
+// -----------------------------------------------------------------------------
+void addMessage(const String& nodeId, const String& messageID, const String& sender, const String& recipient, String content, const String& source, const String& relayID, int rssi, float snr) {
   const int maxMessageLength = 150;
   if (content.length() > maxMessageLength) {
     Serial.println("Message too long, truncating...");
@@ -192,13 +199,29 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
     return;
   }
 
+  // For private messages (recipient != "ALL") only add if this node is either the originator or the designated recipient.
+  String myId = getCustomNodeId(getNodeId());
+  if (recipient != "ALL" && myId != nodeId && myId != recipient) {
+    Serial.println("Private message not for me, skipping local addition.");
+    return;
+  }
+
   String finalSource = "";
   if (nodeId != getCustomNodeId(getNodeId())) {
     finalSource = source;
   }
 
   Message newMessage = {
-    nodeId, sender, content, finalSource, messageID, relayID, rssi, snr, millis()
+    nodeId,
+    sender,
+    recipient, // new field
+    content,
+    finalSource,
+    messageID,
+    relayID,
+    rssi,
+    snr,
+    millis()
   };
 
   messages.insert(messages.begin(), newMessage);
@@ -208,8 +231,8 @@ void addMessage(const String& nodeId, const String& messageID, const String& sen
     messages.pop_back();
   }
 
-  Serial.printf("Message added: NodeID: %s, Sender: %s, Content: %s, Source: %s, ID: %s, RelayID: %s\n",
-                nodeId.c_str(), sender.c_str(), content.c_str(), finalSource.c_str(), messageID.c_str(), relayID.c_str());
+  Serial.printf("Message added: NodeID: %s, Sender: %s, Recipient: %s, Content: %s, Source: %s, ID: %s, RelayID: %s\n",
+                nodeId.c_str(), sender.c_str(), recipient.c_str(), content.c_str(), finalSource.c_str(), messageID.c_str(), relayID.c_str());
 }
 
 void transmitViaWiFi(const String& message) {
@@ -242,27 +265,22 @@ bool isDutyCycleAllowed() {
     dutyCycleActive = false;
     return true;
   }
-  // Implement duty cycle logic based on WiFi transmission if necessary
   dutyCycleActive = false; // Simplified for WiFi-only
   return true;
 }
 
 void drawMainScreen(long txTimeMillis = -1) {
-  // Removed display-related code. Use Serial output instead.
+  // Since there is no display on the ESP32 version, output via Serial.
   if (txTimeMillis >= 0) {
     Serial.print("TxOK (");
     Serial.print(txTimeMillis);
     Serial.println(" ms)");
   }
-
-  // Add additional Serial logs as needed to mimic display information
 }
 
 void displayCarousel() {
-  // Removed display-related code
+  // No display code on ESP32 – no operation.
 }
-
-long lastTxTimeMillisVar = -1;
 
 void transmitWithDutyCycle(const String& message) {
   if (isDutyCycleAllowed()) {
@@ -311,11 +329,9 @@ void sendHeartbeat() {
 void setup() {
   Serial.begin(115200);
 
-  // Removed Heltec and LoRa setup code
-
   // Initialize WiFi Access Point
   WiFi.softAP(MESH_SSID, MESH_PASSWORD);
-  WiFi.setTxPower(WIFI_POWER_19_5dBm); // Ensure your ESP32 supports this
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.setSleep(false);
   
   // Initialize Mesh Network
@@ -339,32 +355,28 @@ void loop() {
   
   mesh.update();
 
-  // Send the first heartbeat after 20 seconds, then subsequent heartbeats every 15 minutes
+  // Send heartbeat: first after 20 sec then every 15 minutes.
   if (millis() - lastHeartbeatTime >= firstHeartbeatDelay && lastHeartbeatTime == 0) {
     sendHeartbeat();
-    lastHeartbeatTime = millis();  // After the first heartbeat, set the lastHeartbeatTime
+    lastHeartbeatTime = millis();
   } else if (millis() - lastHeartbeatTime >= heartbeatInterval && lastHeartbeatTime > 0) {
-    sendHeartbeat();  // Send subsequent heartbeats every 15 minutes
-    lastHeartbeatTime = millis();  // Update the last heartbeat time
+    sendHeartbeat();
+    lastHeartbeatTime = millis();
   }
 
-  // Handle messages transmitted via WiFi
-  // Removed LoRa receive flag handling and related code
-
   updateMeshData();
-  displayCarousel(); // No operation since display is removed
+  displayCarousel();
   dnsServer.processNextRequest();
 
   if (millis() - lastCleanupTime >= cleanupInterval) {
-    cleanupLoRaNodes(); // If LoRa nodes are still tracked via WiFi, otherwise remove
+    cleanupLoRaNodes();
     lastCleanupTime = millis();
   }
-
-  // Removed redundant heartbeat checks
 }
 
-// Function Definitions
-
+// -----------------------------------------------------------------------------
+// Mesh and WiFi receive functions
+// -----------------------------------------------------------------------------
 void initMesh() {
   mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
   mesh.init(MESH_SSID, MESH_PASSWORD, MESH_PORT);
@@ -400,43 +412,44 @@ void receivedCallback(uint32_t from, String& message) {
     if (messageWithoutCRC.startsWith("HEARTBEAT|")) {
       String senderNodeId = messageWithoutCRC.substring(strlen("HEARTBEAT|"));
       Serial.printf("[WiFi Rx] Heartbeat from %s\n", senderNodeId.c_str());
-      // Handle heartbeat over WiFi if needed
+      // Optionally handle heartbeat.
     } else {
-      int firstSeparator = messageWithoutCRC.indexOf('|');
-      int secondSeparator = messageWithoutCRC.indexOf('|', firstSeparator + 1);
-      int thirdSeparator = messageWithoutCRC.indexOf('|', secondSeparator + 1);
-      int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
+      // Expecting the new format: messageID|originatorID|sender|recipient|content|relayID
+      int sep1 = messageWithoutCRC.indexOf('|');
+      int sep2 = messageWithoutCRC.indexOf('|', sep1 + 1);
+      int sep3 = messageWithoutCRC.indexOf('|', sep2 + 1);
+      int sep4 = messageWithoutCRC.indexOf('|', sep3 + 1);
+      int sep5 = messageWithoutCRC.indexOf('|', sep4 + 1);
 
-      if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1) {
-        Serial.println("[WiFi Rx] Invalid format.");
+      if (sep1 == -1 || sep2 == -1 || sep3 == -1 || sep4 == -1 || sep5 == -1) {
+        Serial.println("[WiFi Rx] Invalid message format.");
+        return;
+      }
+
+      String messageID = messageWithoutCRC.substring(0, sep1);
+      String originatorID = messageWithoutCRC.substring(sep1 + 1, sep2);
+      String senderID = messageWithoutCRC.substring(sep2 + 1, sep3);
+      String recipientID = messageWithoutCRC.substring(sep3 + 1, sep4);
+      String messageContent = messageWithoutCRC.substring(sep4 + 1, sep5);
+      String relayID = messageWithoutCRC.substring(sep5 + 1);
+
+      String myId = getCustomNodeId(getNodeId());
+      // Only add the message if it is public or if this node is a participant.
+      if (originatorID == myId) {
+        Serial.println("[WiFi Rx] Own message, adding locally...");
+        addMessage(originatorID, messageID, senderID, recipientID, messageContent, "[WiFi]", relayID, 0, 0.0);
+      } else if (recipientID == "ALL" || myId == recipientID) {
+        addMessage(originatorID, messageID, senderID, recipientID, messageContent, "[WiFi]", relayID, 0, 0.0);
       } else {
-        String messageID = messageWithoutCRC.substring(0, firstSeparator);
-        String originatorID = messageWithoutCRC.substring(firstSeparator + 1, secondSeparator);
-        String senderID = messageWithoutCRC.substring(secondSeparator + 1, thirdSeparator);
-        String messageContent = messageWithoutCRC.substring(thirdSeparator + 1, fourthSeparator);
-        String relayID = messageWithoutCRC.substring(fourthSeparator + 1);
-
-        if (originatorID == getCustomNodeId(getNodeId())) {
-          Serial.println("[WiFi Rx] Own message, just adding locally...");
-          addMessage(originatorID, messageID, senderID, messageContent, "[WiFi]", relayID);
-          return;
-        }
-
-        auto& status = messageTransmissions[messageID];
-        if (status.transmittedViaWiFi && status.transmittedViaLoRa) {
-          Serial.println("[WiFi Rx] Already relayed both ways, ignoring...");
-          return;
-        }
-
-        Serial.printf("[WiFi Rx] Adding message: %s\n", message.c_str());
-        addMessage(originatorID, messageID, senderID, messageContent, "[WiFi]", relayID);
-
-        // If LoRa is removed, you might want to handle retransmission differently or skip
+        Serial.println("[WiFi Rx] Private message not for me, ignoring display.");
       }
     }
   }
 }
 
+// -----------------------------------------------------------------------------
+// Web Server Routes and HTML
+// -----------------------------------------------------------------------------
 const char mainPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
@@ -496,17 +509,23 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       padding: 10px;
       box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
       box-sizing: border-box;
+      flex-wrap: wrap;
+      gap: 5px;
     }
-    #nameInput, #messageInput {
-      width: 40%;
+    #nameInput, #messageInput, #targetInput {
       padding: 10px;
-      margin-right: 5px;
       border: 1px solid #ccc;
       border-radius: 5px;
       box-sizing: border-box;
     }
+    #nameInput {
+      width: 30%;
+    }
+    #targetInput {
+      width: 30%;
+    }
     #messageInput {
-      width: 60%;
+      width: 30%;
     }
     #messageForm input[type=submit] {
       background-color: #007bff;
@@ -588,20 +607,19 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       text-decoration: underline;
     }
   </style>
-
   <script>
-    let deviceCurrentTime = 0;  // Global variable to store the device's current time
-
-    // Function to send a message via the form
+    let deviceCurrentTime = 0;
     function sendMessage(event) {
       event.preventDefault();
 
       const nameInput = document.getElementById('nameInput');
+      const targetInput = document.getElementById('targetInput');
       const messageInput = document.getElementById('messageInput');
-      const sendButton = document.getElementById('sendButton'); // Get the send button
+      const sendButton = document.getElementById('sendButton');
 
-      const sender = nameInput.value;  
-      const msg = messageInput.value;  
+      const sender = nameInput.value;
+      const target = targetInput.value;  
+      const msg = messageInput.value;
 
       if (!sender || !msg) {
         alert('Please enter both a name and a message.');
@@ -613,8 +631,8 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       const formData = new URLSearchParams();
       formData.append('sender', sender);
       formData.append('msg', msg);
+      formData.append('target', target);
 
-      // Disable the send button for 15 seconds
       sendButton.disabled = true;
       sendButton.value = 'Wait 15s';
 
@@ -625,8 +643,8 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       .then(response => {
         if (!response.ok) throw new Error('Failed to send message');
         messageInput.value = '';
+        targetInput.value = '';
         fetchData();
-
         setTimeout(() => {
           sendButton.disabled = false;
           sendButton.value = 'Send';
@@ -645,16 +663,17 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
         .then(response => response.json())
         .then(data => {
           deviceCurrentTime = data.currentDeviceTime;
-
           const ul = document.getElementById('messageList');
           ul.innerHTML = '';
-
           const currentNodeId = localStorage.getItem('nodeId');
-
           data.messages.forEach(msg => {
+            // For private messages, only show if recipient is "ALL" or matches current node.
+            if (msg.recipient && msg.recipient !== "ALL" &&
+                msg.nodeId !== currentNodeId && msg.recipient !== currentNodeId) {
+              return;
+            }
             const li = document.createElement('li');
             li.classList.add('message');
-
             const isSentByCurrentNode = msg.nodeId === currentNodeId;
             if (isSentByCurrentNode) {
               li.classList.add('sent');
@@ -666,10 +685,8 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
                 li.classList.add('wifi');
               }
             }
-
             const messageAgeMillis = deviceCurrentTime - msg.timeReceived;
             const messageAgeSeconds = Math.floor(messageAgeMillis / 1000);
-
             let timestamp = '';
             if (messageAgeSeconds < 60) {
               timestamp = `${messageAgeSeconds} sec ago`;
@@ -679,11 +696,7 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
             } else if (messageAgeSeconds < 86400) {
               const hours = Math.floor(messageAgeSeconds / 3600);
               const minutes = Math.floor((messageAgeSeconds % 3600) / 60);
-              if (minutes > 0) {
-                timestamp = `${hours} hr ${minutes} min ago`;
-              } else {
-                timestamp = `${hours} hr ago`;
-              }
+              timestamp = minutes > 0 ? `${hours} hr ${minutes} min ago` : `${hours} hr ago`;
             } else if (messageAgeSeconds < 604800) {
               const days = Math.floor(messageAgeSeconds / 86400);
               timestamp = `${days} day${days > 1 ? 's' : ''} ago`;
@@ -697,29 +710,29 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
               const years = Math.floor(messageAgeSeconds / 31536000);
               timestamp = `${years} year${years > 1 ? 's' : ''} ago`;
             }
-
             const nodeIdHtml = `Node Id: ${msg.nodeId}`;
             const senderHtml = `<strong>${msg.sender || 'Unknown'}:</strong> `;
+            let privateIndicator = "";
+            if (msg.recipient && msg.recipient !== "ALL") {
+              privateIndicator = `<span style="color:red;">[Private to ${msg.recipient}]</span> `;
+            }
             let relayIdHtml = '';
             if (msg.relayID && msg.relayID !== currentNodeId) {
               relayIdHtml = `<span class="message-relayid">Relay ID: ${msg.relayID}</span>`;
             }
-
             let rssiSnrHtml = '';
             if (msg.source === '[LoRa]' && msg.rssi !== undefined && msg.snr !== undefined) {
               rssiSnrHtml = `<span class="message-rssi-snr">RSSI: ${msg.rssi} dBm, SNR: ${msg.snr} dB</span>`;
             }
-
             li.innerHTML = `
               <span class="message-nodeid">${nodeIdHtml}</span>
-              <div class="message-content">${senderHtml}${msg.content}</div>
+              <div class="message-content">${senderHtml}${privateIndicator}${msg.content}</div>
               ${relayIdHtml}
               <span class="message-time">${timestamp}</span>
               ${rssiSnrHtml}
             `;
             ul.appendChild(li);
           });
-
           ul.scrollTop = ul.scrollHeight;
         })
         .catch(error => console.error('Error fetching messages:', error));
@@ -739,7 +752,6 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
       if (savedName) {
         document.getElementById('nameInput').value = savedName;
       }
-
       fetchData();
       setInterval(fetchData, 5000);
       document.getElementById('messageForm').addEventListener('submit', sendMessage);
@@ -748,19 +760,16 @@ const char mainPageHtml[] PROGMEM = R"rawliteral(
 </head>
 <body>
   <div class="warning">For your safety, do not share your location or any personal information!</div>
-  
   <h2>Meshmingle Chat</h2>
-  
   <div id="deviceCount">Mesh Nodes: 0</div>
-  
   <div id="chat-container">
     <ul id="messageList"></ul>
   </div>
-  
-  <form id="messageForm">
-    <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required>
-    <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="150" required>
-    <input type="submit" id="sendButton" value="Send">
+  <form id="messageForm" style="display: flex; align-items: center; gap: 5px;">
+    <input type="text" id="nameInput" name="sender" placeholder="Your name" maxlength="15" required style="flex: 1;">
+    <input type="text" id="messageInput" name="msg" placeholder="Your message" maxlength="150" required style="flex: 1;">
+    <input type="text" id="targetInput" name="target" placeholder="Node" maxlength="8" style="width: 8ch;">
+    <input type="submit" id="sendButton" value="Send" style="flex-shrink: 0;">
   </form>
 </body>
 </html>
@@ -813,7 +822,6 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
       text-align: left;
       font-size: 0.85em;
       color: #333;
-      font-weight: normal;
       background-color: #fff;
     }
     .node.wifi {
@@ -852,11 +860,9 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
           const wifiUl = document.getElementById('wifiNodeList');
           const loraUl = document.getElementById('loraNodeList');
 
-          // Clear previous lists
           wifiUl.innerHTML = '';
           loraUl.innerHTML = '';
 
-          // Update WiFi Nodes list
           const wifiCount = data.wifiNodes.length;
           document.getElementById('wifiCount').innerText = 'WiFi Nodes Connected: ' + wifiCount;
           data.wifiNodes.forEach((node, index) => {
@@ -866,7 +872,6 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
             wifiUl.appendChild(li);
           });
 
-          // Update LoRa Nodes list
           const loraCount = data.loraNodes.length;
           document.getElementById('loraCount').innerText = 'LoRa Nodes Active: ' + loraCount;
           data.loraNodes.forEach((node, index) => {
@@ -885,25 +890,21 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
 
     window.onload = function() {
       fetchNodes();
-      setInterval(fetchNodes, 5000); // Update node data every 5 seconds
+      setInterval(fetchNodes, 5000);
     };
   </script>
 </head>
 <body>
   <h2>Meshmingle Nodes</h2>
-  
-  <!-- Node count for WiFi -->
   <div class="node-section">
     <span id="wifiCount">WiFi Nodes Connected: 0</span>
     <ul id="wifiNodeList"></ul>
   </div>
   <h2>Lora Coming Soon</h2>
-  <!-- Node count for LoRa -->
   <div class="node-section">
     <span id="loraCount">LoRa Nodes Active: 0</span>
     <ul id="loraNodeList"></ul>
   </div>
-
   <a href="/">Back</a><br>
   <a href="/metrics">Node History</a>
 </body>
@@ -978,9 +979,7 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
     }
   </style>
   <script>
-    // Fetch Node ID and set it on page load
     window.onload = function() {
-      // Assuming the Node ID is being fetched from /deviceCount route
       fetch('/deviceCount')
         .then(response => response.json())
         .then(data => {
@@ -988,7 +987,6 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
           nodeIdElement.textContent = `Node ID: ${data.nodeId}`;
         })
         .catch(error => console.error('Error fetching Node ID:', error));
-
       fetchHistory();
       setInterval(fetchHistory, 5000); 
     };
@@ -999,19 +997,13 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
         .then(data => {
           const container = document.getElementById('historyContainer');
           container.innerHTML = '';
-
-          // Display Node ID, Best RSSI, and Best SNR for each node at the top in a table
           data.loraNodes.forEach(node => {
             const nodeBlock = document.createElement('div');
             nodeBlock.classList.add('node-block');
-
-            // Display Node ID above the table
             const nodeTitle = document.createElement('div');
             nodeTitle.classList.add('node-title');
             nodeTitle.textContent = `Node ID: ${node.nodeId}`;
             nodeBlock.appendChild(nodeTitle);
-
-            // Create a table for Best RSSI and Best SNR
             const nodeTable = document.createElement('table');
             const nodeHeader = document.createElement('thead');
             nodeHeader.innerHTML = `
@@ -1020,7 +1012,6 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
                 <th>Best Signal SNR (dB)</th>
               </tr>`;
             nodeTable.appendChild(nodeHeader);
-
             const nodeBody = document.createElement('tbody');
             const nodeRow = document.createElement('tr');
             nodeRow.innerHTML = `
@@ -1028,11 +1019,7 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
               <td>${node.bestSnr}</td>`;
             nodeBody.appendChild(nodeRow);
             nodeTable.appendChild(nodeBody);
-
-            // Append the node table to the node block
             nodeBlock.appendChild(nodeTable);
-
-            // Create table for the history data
             const historyTable = document.createElement('table');
             const historyHeader = document.createElement('thead');
             historyHeader.innerHTML = `
@@ -1042,28 +1029,22 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
                 <th>SNR (dB)</th>
               </tr>`;
             historyTable.appendChild(historyHeader);
-
             const historyBody = document.createElement('tbody');
             node.history.forEach(sample => {
               const row = document.createElement('tr');
-
               const tsCell = document.createElement('td');
-              tsCell.textContent = sample.timestamp; // now contains "X min ago" from server
+              tsCell.textContent = sample.timestamp;
               row.appendChild(tsCell);
-
               const rssiCell = document.createElement('td');
               rssiCell.textContent = sample.rssi;
               row.appendChild(rssiCell);
-
               const snrCell = document.createElement('td');
               snrCell.textContent = sample.snr;
               row.appendChild(snrCell);
-
               historyBody.appendChild(row);
             });
             historyTable.appendChild(historyBody);
             nodeBlock.appendChild(historyTable);
-
             container.appendChild(nodeBlock);
           });
         })
@@ -1074,9 +1055,8 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
   </script>
 </head>
 <body>
-  <h2>Coming Soon</h2>
   <h2>LoRa 24hr History</h2>
-  <!-- Node ID displayed below the title -->
+  <center><h3>coming soon</h3></center>
   <div class="node-id" id="nodeIdDisplay">Node ID: Loading...</div>
   <div id="historyContainer"></div>
   <a href="/nodes">Back to Nodes</a>
@@ -1086,9 +1066,7 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
 )rawliteral";
 
 /**
- * Helper function to convert an elapsed time in milliseconds 
- * into a human-readable relative time string.
- * e.g., 30 sec => "30 sec ago", 5 min => "5 min ago", 2 hr 30 min 15 sec ago
+ * Helper function to convert an elapsed time in milliseconds into a human-readable relative time string.
  */
 String formatRelativeTime(uint64_t ageMs) {
   uint64_t ageSec = ageMs / 1000;
@@ -1133,7 +1111,7 @@ void setupServerRoutes() {
     bool first = true;
     for (const auto& msg : messages) {
       if (!first) json += ",";
-      json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"content\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\",\"messageID\":\"" + msg.messageID + "\",\"relayID\":\"" + msg.relayID + "\",\"timeReceived\":" + String(msg.timeReceived);
+      json += "{\"nodeId\":\"" + msg.nodeId + "\",\"sender\":\"" + msg.sender + "\",\"recipient\":\"" + msg.recipient + "\",\"content\":\"" + msg.content + "\",\"source\":\"" + msg.source + "\",\"messageID\":\"" + msg.messageID + "\",\"relayID\":\"" + msg.relayID + "\",\"timeReceived\":" + String(msg.timeReceived);
       if (msg.source == "[LoRa]") {
         json += ",\"rssi\":" + String(msg.rssi) + ",\"snr\":" + String(msg.snr, 2);
       }
@@ -1160,13 +1138,12 @@ void setupServerRoutes() {
         firstWifi = false;
     }
     json += "], \"loraNodes\":[";
-  
     bool firstLora = true;
     uint64_t currentTime = millis();
-    const uint64_t FIFTEEN_MINUTES = 900000; // 15 minutes in milliseconds
+    const uint64_t FIFTEEN_MINUTES = 900000;
     for (auto const& [nodeId, loraNode] : loraNodes) {
         uint64_t lastSeenTime = loraNode.lastSeen;
-        if (currentTime - lastSeenTime <= FIFTEEN_MINUTES) {  // Only include nodes seen in the last 15 minutes
+        if (currentTime - lastSeenTime <= FIFTEEN_MINUTES) {
             if (!firstLora) json += ",";
             json += "{\"nodeId\":\"" + nodeId + "\",\"lastRSSI\":" + String(loraNode.lastRSSI)
                   + ",\"lastSNR\":" + String(loraNode.lastSNR, 2)
@@ -1178,54 +1155,54 @@ void setupServerRoutes() {
     request->send(200, "application/json", json);
   });
 
+  // Updated /update route to accept optional "target" parameter for private messages.
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest* request) {
     String newMessage = "";
     String senderName = "";
+    String target = "";
     if (request->hasParam("msg", true)) {
       newMessage = request->getParam("msg", true)->value();
     }
     if (request->hasParam("sender", true)) {
       senderName = request->getParam("sender", true)->value();
     }
-
+    if (request->hasParam("target", true)) {
+      target = request->getParam("target", true)->value();
+    }
     newMessage.replace("<", "&lt;");
     newMessage.replace(">", "&gt;");
     senderName.replace("<", "&lt;");
     senderName.replace(">", "&gt;");
-
+    target.replace("<", "&lt;");
+    target.replace(">", "&gt;");
+    if(target.length() == 0) {
+         target = "ALL";
+    }
     String messageID = generateMessageID(getCustomNodeId(getNodeId()));
     String relayID = getCustomNodeId(getNodeId());
-    String constructedMessage = constructMessage(messageID, getCustomNodeId(getNodeId()), senderName, newMessage, relayID);
-
-    addMessage(getCustomNodeId(getNodeId()), messageID, senderName, newMessage, "[WiFi]", relayID);
+    String constructedMessage = constructMessage(messageID, getCustomNodeId(getNodeId()), senderName, target, newMessage, relayID);
+    addMessage(getCustomNodeId(getNodeId()), messageID, senderName, target, newMessage, "[WiFi]", relayID, 0, 0.0);
     Serial.printf("[WiFi Tx] Adding message: %s\n", constructedMessage.c_str());
-
     transmitWithDutyCycle(constructedMessage);
     request->redirect("/");
   });
 
-  // *** METRICS HISTORY CHANGES ***
+  // Metrics History Routes
   server.on("/metrics", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send_P(200, "text/html", metricsPageHtml);
   });
 
-  // Return only the last hour of samples, converting timestamp to relative time
   server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
       uint64_t now = millis();
       const uint64_t ONE_DAY = 86400000;
       String json = "{\"loraNodes\":[";
-  
       bool firstNode = true;
       for (auto const& kv : loraNodes) {
         if (!firstNode) json += ",";
         firstNode = false;
-  
         const auto &node = kv.second;
-  
-        // Find Best RSSI and Best SNR independently
         int bestRssi = node.history[0].rssi;
         float bestSnr = node.history[0].snr;
-  
         for (const auto &sample : node.history) {
           if (sample.rssi > bestRssi) {
             bestRssi = sample.rssi;
@@ -1234,19 +1211,15 @@ void setupServerRoutes() {
             bestSnr = sample.snr;
           }
         }
-  
         json += "{\"nodeId\":\"" + node.nodeId + "\",\"bestRssi\":" + String(bestRssi)
              + ",\"bestSnr\":" + String(bestSnr, 2) + ",\"history\":[";
-  
         bool firstSample = true;
         for (const auto &sample : node.history) {
           uint64_t ageMs = now - sample.timestamp;
           if (ageMs <= ONE_DAY && sample.rssi != 0) {
             if (!firstSample) json += ",";
             firstSample = false;
-  
             String relativeTime = formatRelativeTime(ageMs);
-  
             json += "{\"timestamp\":\"" + relativeTime
                  + "\",\"rssi\":" + String(sample.rssi)
                  + ",\"snr\":" + String(sample.snr, 2) + "}";
@@ -1255,10 +1228,8 @@ void setupServerRoutes() {
         json += "]}";
       }
       json += "]}";
-  
       request->send(200, "application/json", json);
   });
-  // *** END METRICS HISTORY CHANGES ***
 }
 
 void serveHtml(AsyncWebServerRequest* request, const char* htmlContent) {
