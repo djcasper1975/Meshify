@@ -1,4 +1,4 @@
-//Test v1.00.003
+//Test v1.00.004
 //05-02-2025
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
 //EU868 Band P (869.4 MHz - 869.65 MHz): 10%, 500 mW ERP (10% 24hr 8640 seconds = 6 mins per hour TX Time.)
@@ -7,7 +7,8 @@
 //Per Day: 3,296 Max Char messages within the 8,640,000 ms (10% duty cycle) allowance
 //changes network name to meshmingle.co.uk so people can find the site and see how it works.
 //added node to node private messaging.
-//fixed history showing private messages.
+//node to node messages dont resend from recepient anymore.
+//Now lora nodelist shows when nodes relay messages send heartbeats or origionate a message.
 ////////////////////////////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  M    M  I  N   N  GGGGG  L      EEEEE //
 // MM  MM  E      S      H   H  MM  MM  I  NN  N  G      L      E     //
@@ -181,6 +182,7 @@ struct LoRaNode {
   float lastSNR;
   uint64_t lastSeen;
   std::vector<NodeMetricsSample> history; 
+  String statusEmoji; // <-- NEW: Holds the emoji for this node
 };
 
 std::map<String, LoRaNode> loraNodes;
@@ -279,7 +281,8 @@ void scheduleLoRaTransmission(String message) {
     int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
     int fifthSeparator = messageWithoutCRC.indexOf('|', fourthSeparator + 1);
 
-    if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1 || fifthSeparator == -1) {
+    if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 ||
+        fourthSeparator == -1 || fifthSeparator == -1) {
         Serial.println("[LoRa Schedule] Invalid message format.");
         return;
     }
@@ -291,11 +294,29 @@ void scheduleLoRaTransmission(String message) {
     String messageContent = messageWithoutCRC.substring(fourthSeparator + 1, fifthSeparator);
     String relayID = messageWithoutCRC.substring(fifthSeparator + 1);
 
-    String newRelayID = getCustomNodeId(getNodeId());
-    String updatedMessage = constructMessage(messageID, originatorID, senderID, recipientID, messageContent, newRelayID);
-    fullMessage = updatedMessage;
-    loRaTransmitDelay = millis() + random(2201, 5000);
-    Serial.printf("[LoRa Schedule] Scheduled after %lu ms: %s\n", loRaTransmitDelay - millis(), updatedMessage.c_str());
+    // Do not relay private messages that have reached their recipient.
+    String myId = getCustomNodeId(getNodeId());
+    if (recipientID != "ALL" && myId == recipientID) {
+        Serial.println("[LoRa Schedule] Private message reached its recipient. Not scheduling retransmission.");
+        return;
+    }
+
+    // Check if this node is the originator or a relay
+    if (originatorID != myId) {
+        // This node is relaying someone else's message.
+        String newRelayID = myId;
+        String updatedMessage = constructMessage(messageID, originatorID, senderID, recipientID, messageContent, newRelayID);
+        fullMessage = updatedMessage;
+        loRaTransmitDelay = millis() + random(2201, 5000);
+        Serial.printf("[LoRa Schedule] Scheduled relay from %s after %lu ms: %s\n",
+                      newRelayID.c_str(), loRaTransmitDelay - millis(), updatedMessage.c_str());
+    } else {
+        // This is the originator. Schedule the original message for transmission.
+        fullMessage = message;  // or reconstruct if needed
+        loRaTransmitDelay = millis() + random(2201, 5000);
+        Serial.printf("[LoRa Schedule] Scheduled original message after %lu ms: %s\n",
+                      loRaTransmitDelay - millis(), fullMessage.c_str());
+    }
 }
 
 void transmitViaWiFi(const String& message) {
@@ -675,6 +696,8 @@ void loop() {
               if (node.history.size() > 60) {
                 node.history.erase(node.history.begin());
               }
+              // <-- NEW: Mark heartbeat updates with a red heart emoji
+              node.statusEmoji = "❤️";
               Serial.printf("[LoRa Nodes] Updated/Added node: %s (Heartbeat)\n", senderNodeId.c_str());
             } else {
               Serial.println("[LoRa Rx] Own heartbeat, ignore.");
@@ -686,7 +709,8 @@ void loop() {
             int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
             int fifthSeparator = messageWithoutCRC.indexOf('|', fourthSeparator + 1);
 
-            if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 || fourthSeparator == -1 || fifthSeparator == -1) {
+            if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 ||
+                fourthSeparator == -1 || fifthSeparator == -1) {
               Serial.println("[LoRa Rx] Invalid format.");
             } else {
               String messageID = messageWithoutCRC.substring(0, firstSeparator);
@@ -700,10 +724,14 @@ void loop() {
               float snr = radio.getSNR();
 
               String myId = getCustomNodeId(getNodeId());
-              if (originatorID == myId) {
-                Serial.println("[LoRa Rx] Own message, ignore.");
+
+              // --- Updated Condition ---
+              // Ignore the message only if it's our own original transmission.
+              if (originatorID == myId && relayID == myId) {
+                Serial.println("[LoRa Rx] Own original message, ignore.");
               } else {
-                // Only add to local storage if the message is public or if I'm a participant.
+                // Process the message if it is either from another node
+                // or a relay of our own message.
                 if (recipientID == "ALL" || myId == originatorID || myId == recipientID) {
                   addMessage(originatorID, messageID, senderID, recipientID, messageContent, "[LoRa]", relayID, rssi, snr);
                 } else {
@@ -712,9 +740,8 @@ void loop() {
                 if (!messageTransmissions[messageID].transmittedViaLoRa) {
                   scheduleLoRaTransmission(message);
                 }
-
                 uint64_t currentTime = millis();
-                if (relayID != getCustomNodeId(getNodeId())) {
+                if (relayID != myId) {
                   LoRaNode& relayNode = loraNodes[relayID];
                   relayNode.nodeId = relayID;
                   relayNode.lastRSSI = rssi;
@@ -726,6 +753,12 @@ void loop() {
                   if (relayNode.history.size() > 60) {
                     relayNode.history.erase(relayNode.history.begin());
                   }
+                  // <-- MODIFIED: Set emoji based on whether the message is original or relayed
+                  if (relayID == originatorID) {
+                    relayNode.statusEmoji = "⌨️"; // Original message (keyboard)
+                  } else {
+                    relayNode.statusEmoji = "🛰️"; // Relayed message (satellite)
+                  }
                   Serial.printf("[LoRa Nodes] Updated/Added node: %s\n", relayID.c_str());
                 } else {
                   Serial.println("[LoRa Nodes] RelayID is own node, not updating.");
@@ -734,8 +767,8 @@ void loop() {
             }
           }
         }
+        radio.startReceive();
       }
-      radio.startReceive();
     } else {
       Serial.printf("[LoRa Rx] Receive failed, code %d\n", state);
       radio.startReceive();
@@ -1206,6 +1239,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
       font-size: 0.85em;
       color: #333;
       box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      position: relative; /* <-- NEW: Enable relative positioning */
     }
     .node.wifi {
       background-color: #e7f0ff;
@@ -1235,6 +1269,13 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
     .node-info {
       margin-left: 20px;
       font-size: 0.9em;
+    }
+    /* NEW: Add styling for the status emoji in the bottom right */
+    .node-emoji {
+      position: absolute;
+      bottom: 5px;
+      right: 5px;
+      font-size: 1.2em;
     }
     #nodeCount { 
       margin: 20px auto; 
@@ -1305,6 +1346,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
                 RSSI: ${node.lastRSSI} dBm, SNR: ${node.lastSNR} dB<br>
                 Last seen: ${node.lastSeen}
               </div>
+              <div class="node-emoji">${node.statusEmoji || ""}</div> <!-- NEW: Display the emoji -->
             `;
             loraUl.appendChild(li);
           });
@@ -1602,7 +1644,8 @@ void setupServerRoutes() {
             if (!firstLora) json += ",";
             json += "{\"nodeId\":\"" + nodeId + "\",\"lastRSSI\":" + String(loraNode.lastRSSI)
                   + ",\"lastSNR\":" + String(loraNode.lastSNR, 2)
-                  + ",\"lastSeen\":\"" + formatRelativeTime(currentTime - lastSeenTime) + "\"}";
+                  + ",\"lastSeen\":\"" + formatRelativeTime(currentTime - lastSeenTime) + "\""
+                  + ",\"statusEmoji\":\"" + loraNode.statusEmoji + "\"}"; // <-- NEW: Include emoji
             firstLora = false;
         }
     }
@@ -1680,7 +1723,7 @@ void setupServerRoutes() {
           String relativeTime = formatRelativeTime(ageMs);
           json += "{\"timestamp\":\"" + relativeTime
                + "\",\"rssi\":" + String(sample.rssi)
-               + ",\"snr\":" + String(sample.snr, 2) + "}";
+               + ",\"snr\":" + String(sample.snr, 2) + "\"}";
         }
       }
       json += "]}";
