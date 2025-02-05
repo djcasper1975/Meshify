@@ -1693,44 +1693,45 @@ void setupServerRoutes() {
     request->send_P(200, "text/html", metricsPageHtml);
   });
 
-  server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
-    uint64_t now = millis();
-    const uint64_t ONE_DAY = 86400000;
-    String json = "{\"loraNodes\":[";
-    bool firstNode = true;
-    for (auto const& kv : loraNodes) {
-      if (!firstNode) json += ",";
-      firstNode = false;
-      const auto &node = kv.second;
-      int bestRssi = node.history.empty() ? node.lastRSSI : node.history[0].rssi;
-      float bestSnr = node.history.empty() ? node.lastSNR : node.history[0].snr;
-      for (const auto &sample : node.history) {
-        if (sample.rssi > bestRssi) {
-          bestRssi = sample.rssi;
-        }
-        if (sample.snr > bestSnr) {
-          bestSnr = sample.snr;
-        }
+server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
+  uint64_t now = millis();
+  const uint64_t ONE_DAY = 86400000;
+  String json = "{\"loraNodes\":[";
+  bool firstNode = true;
+  for (auto const& kv : loraNodes) {
+    if (!firstNode) json += ",";
+    firstNode = false;
+    const auto &node = kv.second;
+    int bestRssi = node.history.empty() ? node.lastRSSI : node.history[0].rssi;
+    float bestSnr = node.history.empty() ? node.lastSNR : node.history[0].snr;
+    for (const auto &sample : node.history) {
+      if (sample.rssi > bestRssi) {
+        bestRssi = sample.rssi;
       }
-      json += "{\"nodeId\":\"" + node.nodeId + "\",\"bestRssi\":" + String(bestRssi)
-           + ",\"bestSnr\":" + String(bestSnr, 2) + ",\"history\":[";
-      bool firstSample = true;
-      for (const auto &sample : node.history) {
-        uint64_t ageMs = now - sample.timestamp;
-        if (ageMs <= ONE_DAY && sample.rssi != 0) {
-          if (!firstSample) json += ",";
-          firstSample = false;
-          String relativeTime = formatRelativeTime(ageMs);
-          json += "{\"timestamp\":\"" + relativeTime
-               + "\",\"rssi\":" + String(sample.rssi)
-               + ",\"snr\":" + String(sample.snr, 2) + "\"}";
-        }
+      if (sample.snr > bestSnr) {
+        bestSnr = sample.snr;
       }
-      json += "]}";
+    }
+    json += "{\"nodeId\":\"" + node.nodeId + "\",\"bestRssi\":" + String(bestRssi)
+         + ",\"bestSnr\":" + String(bestSnr, 2) + ",\"history\":[";
+    bool firstSample = true;
+    for (const auto &sample : node.history) {
+      uint64_t ageMs = now - sample.timestamp;
+      if (ageMs <= ONE_DAY && sample.rssi != 0) {
+        if (!firstSample) json += ",";
+        firstSample = false;
+        String relativeTime = formatRelativeTime(ageMs);
+        // Removed the extra double quote after the snr value.
+        json += "{\"timestamp\":\"" + relativeTime
+             + "\",\"rssi\":" + String(sample.rssi)
+             + ",\"snr\":" + String(sample.snr, 2) + "}";
+      }
     }
     json += "]}";
-    request->send(200, "application/json", json);
-  });
+  }
+  json += "]}";
+  request->send(200, "application/json", json);
+});
 
   // --- New /loraDetails page remains unchanged ---
   server.on("/loraDetails", HTTP_GET, [](AsyncWebServerRequest *request){
