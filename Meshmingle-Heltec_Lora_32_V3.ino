@@ -1,5 +1,5 @@
-//Test v1.00.002
-//01-02-2025
+//Test v1.00.003
+//05-02-2025
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
 //EU868 Band P (869.4 MHz - 869.65 MHz): 10%, 500 mW ERP (10% 24hr 8640 seconds = 6 mins per hour TX Time.)
 //After Accounting for Heartbeats: 20 sec after boot then every 15 mins therafter.
@@ -7,6 +7,7 @@
 //Per Day: 3,296 Max Char messages within the 8,640,000 ms (10% duty cycle) allowance
 //changes network name to meshmingle.co.uk so people can find the site and see how it works.
 //added node to node private messaging.
+//fixed history showing private messages.
 ////////////////////////////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  M    M  I  N   N  GGGGG  L      EEEEE //
 // MM  MM  E      S      H   H  MM  MM  I  NN  N  G      L      E     //
@@ -1542,6 +1543,8 @@ String formatRelativeTime(uint64_t ageMs) {
 std::vector<Message> getNodeMessages(const String& nodeId) {
   std::vector<Message> result;
   for (auto &m : messages) {
+    // Only include public messages (recipient == "ALL")
+    if (m.recipient != "ALL") continue;
     if (m.nodeId == nodeId || m.relayID == nodeId) {
       result.push_back(m);
     }
