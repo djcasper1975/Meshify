@@ -1,4 +1,4 @@
-//Test v1.00.005
+//Test v1.00.006
 //06-02-2025
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
 //EU868 Band P (869.4 MHz - 869.65 MHz): 10%, 500 mW ERP (10% 24hr 8640 seconds = 6 mins per hour TX Time.)
@@ -7,6 +7,7 @@
 //Per Day: 3,296 Max Char messages within the 8,640,000 ms (10% duty cycle) allowance
 //we should see indirect lora nodes now when messages are recived via a relay. (not from heartbeats)
 //fixed issue where relays wasnt relaying anymore.
+//Removed code pausing the loop. this was causing us to miss some rx
 ////////////////////////////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  M    M  I  N   N  GGGGG  L      EEEEE //
 // MM  MM  E      S      H   H  MM  MM  I  NN  N  G      L      E     //
@@ -569,7 +570,7 @@ void transmitWithDutyCycle(const String& message) {
       calculateDutyCyclePause(tx_time);
       last_tx = millis();
       drawMainScreen(tx_time);
-      delay(200);
+      //delay(200); testing to see if things work faster without delays.
       radio.startReceive();
 
       // Forward the message via WiFi if it is not a heartbeat.
@@ -579,6 +580,8 @@ void transmitWithDutyCycle(const String& message) {
     } else {
       Serial.printf("[LoRa Tx] Transmission failed with error code: %i\n", transmitStatus);
     }
+        // Clear the global message buffer after transmitting
+    fullMessage = "";
   } else {
     Serial.printf("[LoRa Tx] Duty cycle limit reached. Wait %i seconds.\n",
                   (int)((minimum_pause - (millis() - last_tx)) / 1000) + 1);
@@ -596,26 +599,38 @@ void sendHeartbeat() {
   sprintf(crcStr, "%04X", crc);
   String heartbeatMessage = heartbeatWithoutCRC + "|" + String(crcStr);
 
-  if (isDutyCycleAllowed()) {
-    tx_time = millis();
-    Serial.printf("[Heartbeat Tx] Sending: %s\n", heartbeatMessage.c_str());
-    heltec_led(50);
-    int transmitStatus = radio.transmit(heartbeatMessage.c_str());
-    tx_time = millis() - tx_time;
-    heltec_led(0);
-
-    if (transmitStatus == RADIOLIB_ERR_NONE) {
-      Serial.printf("[Heartbeat Tx] OK (%i ms)\n", (int)tx_time);
-      calculateDutyCyclePause(tx_time);
-      last_tx = millis();
-      drawMainScreen(tx_time);
-      delay(200);
-      radio.startReceive();
-    } else {
-      Serial.printf("[Heartbeat Tx] Failed (%i)\n", transmitStatus);
-    }
-  } else {
+  // Check if duty cycle restrictions allow transmission.
+  if (!isDutyCycleAllowed()) {
     Serial.println("[Heartbeat Tx] Duty cycle limit reached, skipping.");
+    return;
+  }
+
+  // Check if the radio is busy (similar to queued messages)
+  if (radio.available()) {
+    Serial.println("[Heartbeat Tx] Radio is busy receiving a packet. Delaying heartbeat by 500ms.");
+    //delay(500);  // Consider using a non-blocking approach if required. turned off to see if things get faster.
+    return;
+  }
+
+  uint64_t txStart = millis();
+  Serial.printf("[Heartbeat Tx] Sending: %s\n", heartbeatMessage.c_str());
+  heltec_led(50);
+  int transmitStatus = radio.transmit(heartbeatMessage.c_str());
+  uint64_t txTime = millis() - txStart;
+  heltec_led(0);
+
+  if (transmitStatus == RADIOLIB_ERR_NONE) {
+    Serial.printf("[Heartbeat Tx] Sent successfully (%llu ms)\n", txTime);
+    calculateDutyCyclePause(txTime);
+    last_tx = millis();
+    drawMainScreen(txTime);
+    //delay(200); turned off to see if things get faster.
+    radio.startReceive();
+
+    // Clear the global message buffer (if applicable)
+    fullMessage = "";
+  } else {
+    Serial.printf("[Heartbeat Tx] Failed with error code: %i\n", transmitStatus);
   }
 }
 
