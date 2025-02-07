@@ -1,13 +1,13 @@
-//Test v1.00.006
-//06-02-2025
+//Test v1.00.007
+//07-02-2025
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
 //EU868 Band P (869.4 MHz - 869.65 MHz): 10%, 500 mW ERP (10% 24hr 8640 seconds = 6 mins per hour TX Time.)
 //After Accounting for Heartbeats: 20 sec after boot then every 15 mins therafter.
 //Per Hour: 136 Max Char messages within the 6-minute (360,000 ms) duty cycle
 //Per Day: 3,296 Max Char messages within the 8,640,000 ms (10% duty cycle) allowance
-//we should see indirect lora nodes now when messages are recived via a relay. (not from heartbeats)
-//fixed issue where relays wasnt relaying anymore.
-//Removed code pausing the loop. this was causing us to miss some rx
+//No longer sends fullmessage string. we now use a list so we dont miss anything.
+//added a 10 sec timer for when we check if theres any rx before tx sometimes it hangs in rx. fixed.
+//made random seeding a little better.
 ////////////////////////////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  M    M  I  N   N  GGGGG  L      EEEEE //
 // MM  MM  E      S      H   H  MM  MM  I  NN  N  G      L      E     //
@@ -23,7 +23,7 @@
 #include <DNSServer.h>
 #include <Wire.h>
 #include <esp_task_wdt.h> // Watchdog timer library
-#include <vector>         // For handling list of messages
+#include <vector>         // For handling list of messages and our queue
 #include <map>            // For unified retransmission tracking
 #include <RadioLib.h>
 
@@ -33,10 +33,24 @@ struct TransmissionStatus {
   bool transmittedViaLoRa = false;
   bool addedToMessages = false;  // Flag to track if the message has been added to messages vector
   bool relayed = false;          // NEW: whether we have already relayed this message
+  uint64_t timestamp = millis();  // record when the entry was created/updated
 };
 
 // Map to track retransmissions
 std::map<String, TransmissionStatus> messageTransmissions;
+
+// Call this function periodically (e.g., every 5 minutes)
+void cleanupMessageTransmissions() {
+  uint64_t now = millis();
+  const uint64_t EXPIRY_TIME = 900000; // 15 min in ms
+  for (auto it = messageTransmissions.begin(); it != messageTransmissions.end(); ) {
+    if (now - it->second.timestamp > EXPIRY_TIME) {
+      it = messageTransmissions.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
 
 // LoRa Parameters
 #define PAUSE 5400000  
@@ -46,24 +60,21 @@ std::map<String, TransmissionStatus> messageTransmissions;
 #define TRANSMIT_POWER 22 
 #define CODING_RATE 8  
 String rxdata;
+// Global RX flag
 volatile bool rxFlag = false;
 long counter = 0;
 uint64_t tx_time;
 uint64_t last_tx = 0;
 uint64_t minimum_pause = 0;
 unsigned long lastTransmitTime = 0;  
-String fullMessage;                  
 
-// Function to handle LoRa received packets
-void rx() {
-  rxFlag = true;
-}
+// Instead of a single message buffer, we now use a queue for outgoing LoRa messages.
+std::vector<String> loraTransmissionQueue;
 
-// Define the maximum allowed duty cycle (10%)
+// Duty Cycle Definitions and Variables
 #define DUTY_CYCLE_LIMIT_MS 360000   // 6 minutes in a 60-minute window
 #define DUTY_CYCLE_WINDOW   3600000  // 60 minutes in milliseconds
 
-// Duty Cycle Variables
 uint64_t cumulativeTxTime = 0;
 uint64_t dutyCycleStartTime = 0;
 
@@ -203,8 +214,6 @@ std::map<String, IndirectNode> indirectNodes;
 unsigned long lastCleanupTime = 0;
 const unsigned long cleanupInterval = 60000; // 1 minute
 
-
-
 void cleanupLoRaNodes() {
   uint64_t currentTime = millis();
   const uint64_t timeout = 86400000; // 24 hours
@@ -320,16 +329,21 @@ void scheduleLoRaTransmission(String message) {
         // This node is relaying someone else's message.
         String newRelayID = myId;
         String updatedMessage = constructMessage(messageID, originatorID, senderID, recipientID, messageContent, newRelayID);
-        fullMessage = updatedMessage;
-        loRaTransmitDelay = millis() + random(2201, 5000);
+        // Instead of overwriting a single fullMessage, push it onto the queue.
+        loraTransmissionQueue.push_back(updatedMessage);
+        if (loraTransmissionQueue.size() == 1) {
+          loRaTransmitDelay = millis() + random(2201, 5000);
+        }
         Serial.printf("[LoRa Schedule] Scheduled relay from %s after %lu ms: %s\n",
                       newRelayID.c_str(), loRaTransmitDelay - millis(), updatedMessage.c_str());
     } else {
         // This is the originator. Schedule the original message for transmission.
-        fullMessage = message;  // or reconstruct if needed
-        loRaTransmitDelay = millis() + random(2201, 5000);
+        loraTransmissionQueue.push_back(message);
+        if (loraTransmissionQueue.size() == 1) {
+          loRaTransmitDelay = millis() + random(2201, 5000);
+        }
         Serial.printf("[LoRa Schedule] Scheduled original message after %lu ms: %s\n",
-                      loRaTransmitDelay - millis(), fullMessage.c_str());
+                      loRaTransmitDelay - millis(), message.c_str());
     }
 }
 
@@ -529,62 +543,79 @@ void transmitWithDutyCycle(const String& message) {
     return;
   }
 
-  // Extract the messageID (assumed to be the substring up to the first '|')
+  // Check if the radio is busy with a timeout of 10 seconds.
+  // If radio.available() remains true for 10 seconds, force TX.
+  static uint64_t rxCheckStart = 0;
+  if (radio.available()) {
+    if (rxCheckStart == 0) {
+      rxCheckStart = millis();  // Start timer when RX is first detected.
+    }
+    if (millis() - rxCheckStart >= 10000) {  // 10-second timeout reached.
+      Serial.println("[LoRa Tx] RX appears stuck for 10 seconds. Forcing transmission...");
+      // Since SX1262 doesn't have stopReceive(), we simply restart RX mode.
+      radio.startReceive();  
+      rxCheckStart = 0;  // Reset timer.
+    } else {
+      Serial.println("[LoRa Tx] Radio busy. Delaying transmission by 500ms.");
+      loRaTransmitDelay = millis() + 500;
+      return;
+    }
+  } else {
+    // Reset the timer if the radio is not busy.
+    rxCheckStart = 0;
+  }
+
+  // Extract the messageID from the message (assumes message format is valid).
   int separatorIndex = message.indexOf('|');
   if (separatorIndex == -1) {
     Serial.println("[LoRa Tx] Invalid message format.");
     return;
   }
   String messageID = message.substring(0, separatorIndex);
-
-  // Retrieve the transmission status for this message.
   auto& status = messageTransmissions[messageID];
   if (status.transmittedViaLoRa) {
     Serial.println("[LoRa Tx] Message already sent via LoRa, skipping...");
+    if (!loraTransmissionQueue.empty()) {
+      loraTransmissionQueue.erase(loraTransmissionQueue.begin());
+      if (!loraTransmissionQueue.empty()) {
+        loRaTransmitDelay = millis() + random(2201, 5000);
+      }
+    }
     return;
   }
 
-  // Check if duty cycle allows for a transmission.
-  if (isDutyCycleAllowed()) {
-    // If a packet is being received, delay the transmission.
-    if (radio.available()) {
-      Serial.println("[LoRa Tx] Currently receiving a packet. Delaying transmission...");
-      loRaTransmitDelay = millis() + 500;
-      return;
+  // Record the transmission start time and transmit the message.
+  tx_time = millis();
+  Serial.printf("[LoRa Tx] Transmitting: %s\n", message.c_str());
+  heltec_led(50);
+  int transmitStatus = radio.transmit(message.c_str());
+  tx_time = millis() - tx_time;
+  heltec_led(0);
+
+  if (transmitStatus == RADIOLIB_ERR_NONE) {
+    Serial.printf("[LoRa Tx] Sent successfully (%i ms)\n", (int)tx_time);
+    status.transmittedViaLoRa = true;
+    messageTransmissions[messageID].relayed = true;  // Mark the message as relayed.
+    calculateDutyCyclePause(tx_time);
+    last_tx = millis();
+    drawMainScreen(tx_time);
+    radio.startReceive();
+
+    // Forward the message via WiFi if it's not a heartbeat.
+    if (!message.startsWith("HEARTBEAT|")) {
+      transmitViaWiFi(message);
     }
 
-    // Record the transmission start time.
-    tx_time = millis();
-    Serial.printf("[LoRa Tx] Transmitting: %s\n", message.c_str());
-
-    heltec_led(50);
-    int transmitStatus = radio.transmit(message.c_str());
-    tx_time = millis() - tx_time;
-    heltec_led(0);
-
-    // Check if the transmission was successful.
-    if (transmitStatus == RADIOLIB_ERR_NONE) {
-      Serial.printf("[LoRa Tx] Sent successfully (%i ms)\n", (int)tx_time);
-      status.transmittedViaLoRa = true;
-      messageTransmissions[messageID].relayed = true;  // Mark the message as relayed!
-      calculateDutyCyclePause(tx_time);
-      last_tx = millis();
-      drawMainScreen(tx_time);
-      //delay(200); testing to see if things work faster without delays.
-      radio.startReceive();
-
-      // Forward the message via WiFi if it is not a heartbeat.
-      if (!message.startsWith("HEARTBEAT|")) {
-        transmitViaWiFi(message);
-      }
-    } else {
-      Serial.printf("[LoRa Tx] Transmission failed with error code: %i\n", transmitStatus);
+    // After successful transmission, remove the message from the queue.
+    if (!loraTransmissionQueue.empty()) {
+      loraTransmissionQueue.erase(loraTransmissionQueue.begin());
     }
-        // Clear the global message buffer after transmitting
-    fullMessage = "";
+    // If more messages remain, schedule the next transmission.
+    if (!loraTransmissionQueue.empty()) {
+      loRaTransmitDelay = millis() + random(2201, 5000);
+    }
   } else {
-    Serial.printf("[LoRa Tx] Duty cycle limit reached. Wait %i seconds.\n",
-                  (int)((minimum_pause - (millis() - last_tx)) / 1000) + 1);
+    Serial.printf("[LoRa Tx] Transmission failed with error code: %i\n", transmitStatus);
   }
 }
 
@@ -608,7 +639,6 @@ void sendHeartbeat() {
   // Check if the radio is busy (similar to queued messages)
   if (radio.available()) {
     Serial.println("[Heartbeat Tx] Radio is busy receiving a packet. Delaying heartbeat by 500ms.");
-    //delay(500);  // Consider using a non-blocking approach if required. turned off to see if things get faster.
     return;
   }
 
@@ -624,14 +654,17 @@ void sendHeartbeat() {
     calculateDutyCyclePause(txTime);
     last_tx = millis();
     drawMainScreen(txTime);
-    //delay(200); turned off to see if things get faster.
     radio.startReceive();
-
-    // Clear the global message buffer (if applicable)
-    fullMessage = "";
   } else {
     Serial.printf("[Heartbeat Tx] Failed with error code: %i\n", transmitStatus);
   }
+}
+
+// --------------------------------------------------------------------------
+// IMPORTANT: Callback for radio RX events. (Renamed to avoid conflict.)
+// --------------------------------------------------------------------------
+void onRadioRx() {
+  rxFlag = true;
 }
 
 void setup() {
@@ -650,7 +683,8 @@ void setup() {
   showScrollingMonospacedAsciiArt(); 
 
   RADIOLIB_OR_HALT(radio.begin());
-  radio.setDio1Action(rx);
+  // Set the radio DIO1 action callback to our renamed function.
+  radio.setDio1Action(onRadioRx);
 
   RADIOLIB_OR_HALT(radio.setFrequency(FREQUENCY));
   RADIOLIB_OR_HALT(radio.setBandwidth(BANDWIDTH));
@@ -674,8 +708,8 @@ void setup() {
 
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-
-  randomSeed(analogRead(0));
+// Combine analog noise and a high-resolution timer:
+randomSeed(analogRead(0) ^ micros());
 }
 
 void loop() {
@@ -692,156 +726,173 @@ void loop() {
     lastHeartbeatTime = millis();
   }
 
-if (rxFlag) {
-  rxFlag = false;
-  String message;
-  int state = radio.readData(message);
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.printf("[LoRa Rx] %s\n", message.c_str());
+  if (rxFlag) {
+    rxFlag = false;
+    String message;
+    int state = radio.readData(message);
+    if (state == RADIOLIB_ERR_NONE) {
+      Serial.printf("[LoRa Rx] %s\n", message.c_str());
 
-    int lastSeparatorIndex = message.lastIndexOf('|');
-    if (lastSeparatorIndex == -1) {
-      Serial.println("[LoRa Rx] Invalid format (no CRC).");
-    } else {
-      String crcStr = message.substring(lastSeparatorIndex + 1);
-      String messageWithoutCRC = message.substring(0, lastSeparatorIndex);
-
-      uint16_t receivedCRC = (uint16_t)strtol(crcStr.c_str(), NULL, 16);
-      uint16_t computedCRC = crc16_ccitt((const uint8_t *)messageWithoutCRC.c_str(), messageWithoutCRC.length());
-
-      if (receivedCRC != computedCRC) {
-        Serial.printf("[LoRa Rx] CRC mismatch. Recv: %04X, Computed: %04X\n", receivedCRC, computedCRC);
+      int lastSeparatorIndex = message.lastIndexOf('|');
+      if (lastSeparatorIndex == -1) {
+        Serial.println("[LoRa Rx] Invalid format (no CRC).");
       } else {
-        Serial.println("[LoRa Rx] CRC valid.");
+        String crcStr = message.substring(lastSeparatorIndex + 1);
+        String messageWithoutCRC = message.substring(0, lastSeparatorIndex);
 
-        // --- Heartbeat Handling (Unchanged) ---
-        if (messageWithoutCRC.startsWith("HEARTBEAT|")) {
-          String senderNodeId = messageWithoutCRC.substring(strlen("HEARTBEAT|"));
-          Serial.printf("[LoRa Rx] Heartbeat from %s\n", senderNodeId.c_str());
-          int rssi = radio.getRSSI();
-          float snr = radio.getSNR();
-          uint64_t currentTime = millis();
+        uint16_t receivedCRC = (uint16_t)strtol(crcStr.c_str(), NULL, 16);
+        uint16_t computedCRC = crc16_ccitt((const uint8_t *)messageWithoutCRC.c_str(), messageWithoutCRC.length());
 
-          if (senderNodeId != getCustomNodeId(getNodeId())) {
-            LoRaNode& node = loraNodes[senderNodeId];
-            node.nodeId = senderNodeId;
-            node.lastRSSI = rssi;
-            node.lastSNR = snr;
-            node.lastSeen = currentTime;
+        if (receivedCRC != computedCRC) {
+          Serial.printf("[LoRa Rx] CRC mismatch. Recv: %04X, Computed: %04X\n", receivedCRC, computedCRC);
+        } else {
+          Serial.println("[LoRa Rx] CRC valid.");
 
-            NodeMetricsSample sample = { currentTime, rssi, snr };
-            node.history.push_back(sample);
-            if (node.history.size() > 60) {
-              node.history.erase(node.history.begin());
-            }
-            node.statusEmoji = "❤️";
-            Serial.printf("[LoRa Nodes] Updated/Added node: %s (Heartbeat)\n", senderNodeId.c_str());
-          } else {
-            Serial.println("[LoRa Rx] Own heartbeat, ignore.");
-          }
-        }
-        // --- Non-Heartbeat (Message) Handling ---
-        else {
-          int firstSeparator = messageWithoutCRC.indexOf('|');
-          int secondSeparator = messageWithoutCRC.indexOf('|', firstSeparator + 1);
-          int thirdSeparator = messageWithoutCRC.indexOf('|', secondSeparator + 1);
-          int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
-          int fifthSeparator = messageWithoutCRC.indexOf('|', fourthSeparator + 1);
-
-          if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 ||
-              fourthSeparator == -1 || fifthSeparator == -1) {
-            Serial.println("[LoRa Rx] Invalid format.");
-          } else {
-            String messageID = messageWithoutCRC.substring(0, firstSeparator);
-            String originatorID = messageWithoutCRC.substring(firstSeparator + 1, secondSeparator);
-            String senderID = messageWithoutCRC.substring(secondSeparator + 1, thirdSeparator);
-            String recipientID = messageWithoutCRC.substring(thirdSeparator + 1, fourthSeparator);
-            String messageContent = messageWithoutCRC.substring(fourthSeparator + 1, fifthSeparator);
-            String relayID = messageWithoutCRC.substring(fifthSeparator + 1);
-
-            int rssi = radio.getRSSI();
-            float snr = radio.getSNR();
-
-            String myId = getCustomNodeId(getNodeId());
-
-            // Ignore the message if it's our own original transmission.
-            if (originatorID == myId && relayID == myId) {
-              Serial.println("[LoRa Rx] Own original message, ignore.");
-            } else {
-              // Process and add the message if public or intended for us.
-              if (recipientID == "ALL" || myId == originatorID || myId == recipientID) {
-                addMessage(originatorID, messageID, senderID, recipientID, messageContent, "[LoRa]", relayID, rssi, snr);
-              } else {
-                Serial.println("[LoRa Rx] Private message not for me, ignoring display.");
-              }
-              // --- Use the new "relayed" flag to decide whether to schedule a relay ---
-              if (!messageTransmissions[messageID].relayed) {
-                scheduleLoRaTransmission(message);
-              }
-              uint64_t currentTime = millis();
-
-              // Update direct relay node information
-              if (relayID != myId) {
-                LoRaNode& relayNode = loraNodes[relayID];
-                relayNode.nodeId = relayID;
-                relayNode.lastRSSI = rssi;
-                relayNode.lastSNR = snr;
-                relayNode.lastSeen = currentTime;
-
-                NodeMetricsSample sample = { currentTime, rssi, snr };
-                relayNode.history.push_back(sample);
-                if (relayNode.history.size() > 60) {
-                  relayNode.history.erase(relayNode.history.begin());
-                }
-                if (relayID == originatorID) {
-                  relayNode.statusEmoji = "⌨️";
-                } else {
-                  relayNode.statusEmoji = "🛰️";
-                }
-                Serial.printf("[LoRa Nodes] Updated/Added node: %s\n", relayID.c_str());
-              } else {
-                Serial.println("[LoRa Nodes] RelayID is own node, not updating.");
-              }
-
-              // Update indirect nodes if applicable
-              if (originatorID != myId && relayID != myId && relayID != originatorID) {
-                bool seenDirectly = false;
-                if (loraNodes.find(originatorID) != loraNodes.end()) {
-                  const uint64_t FIFTEEN_MINUTES = 900000;
-                  uint64_t lastSeenDirect = loraNodes[originatorID].lastSeen;
-                  if (millis() - lastSeenDirect <= FIFTEEN_MINUTES) {
-                    seenDirectly = true;
-                  }
-                }
-                if (!seenDirectly) {
-                  IndirectNode indNode;
-                  indNode.originatorId = originatorID;
-                  indNode.relayId = relayID;
-                  indNode.rssi = rssi;
-                  indNode.snr = snr;
-                  indNode.lastSeen = currentTime;
-                  indirectNodes[originatorID] = indNode;
-                  Serial.printf("[Indirect Nodes] Updated indirect node: Originator: %s, Relay: %s, RSSI: %d, SNR: %.2f\n",
-                                originatorID.c_str(), relayID.c_str(), rssi, snr);
-                } else {
-                  Serial.printf("[Indirect Nodes] Skipped indirect update for %s because it is seen directly.\n", originatorID.c_str());
-                }
-              }
-            }
-          }
-        }
-      }
-      radio.startReceive();
-    }
-  } else {
-    Serial.printf("[LoRa Rx] Receive failed, code %d\n", state);
+        // --- Only process messages from our system ---
+// For non-heartbeat messages, check that the first token (messageID) starts with our expected prefix.
+if (!messageWithoutCRC.startsWith("HEARTBEAT|")) {
+  int firstSeparator = messageWithoutCRC.indexOf('|');
+  if (firstSeparator == -1) {
+    Serial.println("[LoRa Rx] Invalid message format.");
     radio.startReceive();
+    return;
+  }
+  String messageID = messageWithoutCRC.substring(0, firstSeparator);
+  if (!messageID.startsWith("!M")) {  // Our system-generated IDs start with "!M"
+    Serial.println("[LoRa Rx] Foreign message detected, ignoring.");
+    radio.startReceive();
+    return;
   }
 }
 
-  if (!fullMessage.isEmpty() && millis() >= loRaTransmitDelay) {
-    transmitWithDutyCycle(fullMessage);
-    fullMessage = "";
+          // --- Heartbeat Handling (Unchanged) ---
+          if (messageWithoutCRC.startsWith("HEARTBEAT|")) {
+            String senderNodeId = messageWithoutCRC.substring(strlen("HEARTBEAT|"));
+            Serial.printf("[LoRa Rx] Heartbeat from %s\n", senderNodeId.c_str());
+            int rssi = radio.getRSSI();
+            float snr = radio.getSNR();
+            uint64_t currentTime = millis();
+
+            if (senderNodeId != getCustomNodeId(getNodeId())) {
+              LoRaNode& node = loraNodes[senderNodeId];
+              node.nodeId = senderNodeId;
+              node.lastRSSI = rssi;
+              node.lastSNR = snr;
+              node.lastSeen = currentTime;
+
+              NodeMetricsSample sample = { currentTime, rssi, snr };
+              node.history.push_back(sample);
+              if (node.history.size() > 60) {
+                node.history.erase(node.history.begin());
+              }
+              node.statusEmoji = "❤️";
+              Serial.printf("[LoRa Nodes] Updated/Added node: %s (Heartbeat)\n", senderNodeId.c_str());
+            } else {
+              Serial.println("[LoRa Rx] Own heartbeat, ignore.");
+            }
+          }
+          // --- Non-Heartbeat (Message) Handling ---
+          else {
+            int firstSeparator = messageWithoutCRC.indexOf('|');
+            int secondSeparator = messageWithoutCRC.indexOf('|', firstSeparator + 1);
+            int thirdSeparator = messageWithoutCRC.indexOf('|', secondSeparator + 1);
+            int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
+            int fifthSeparator = messageWithoutCRC.indexOf('|', fourthSeparator + 1);
+
+            if (firstSeparator == -1 || secondSeparator == -1 || thirdSeparator == -1 ||
+                fourthSeparator == -1 || fifthSeparator == -1) {
+              Serial.println("[LoRa Rx] Invalid format.");
+            } else {
+              String messageID = messageWithoutCRC.substring(0, firstSeparator);
+              String originatorID = messageWithoutCRC.substring(firstSeparator + 1, secondSeparator);
+              String senderID = messageWithoutCRC.substring(secondSeparator + 1, thirdSeparator);
+              String recipientID = messageWithoutCRC.substring(thirdSeparator + 1, fourthSeparator);
+              String messageContent = messageWithoutCRC.substring(fourthSeparator + 1, fifthSeparator);
+              String relayID = messageWithoutCRC.substring(fifthSeparator + 1);
+
+              int rssi = radio.getRSSI();
+              float snr = radio.getSNR();
+
+              String myId = getCustomNodeId(getNodeId());
+
+              // Ignore the message if it's our own original transmission.
+              if (originatorID == myId && relayID == myId) {
+                Serial.println("[LoRa Rx] Own original message, ignore.");
+              } else {
+                // Process and add the message if public or intended for us.
+                if (recipientID == "ALL" || myId == originatorID || myId == recipientID) {
+                  addMessage(originatorID, messageID, senderID, recipientID, messageContent, "[LoRa]", relayID, rssi, snr);
+                } else {
+                  Serial.println("[LoRa Rx] Private message not for me, ignoring display.");
+                }
+                // --- Use the new "relayed" flag to decide whether to schedule a relay ---
+                if (!messageTransmissions[messageID].relayed) {
+                  scheduleLoRaTransmission(message);
+                }
+                uint64_t currentTime = millis();
+
+                // Update direct relay node information
+                if (relayID != myId) {
+                  LoRaNode& relayNode = loraNodes[relayID];
+                  relayNode.nodeId = relayID;
+                  relayNode.lastRSSI = rssi;
+                  relayNode.lastSNR = snr;
+                  relayNode.lastSeen = currentTime;
+
+                  NodeMetricsSample sample = { currentTime, rssi, snr };
+                  relayNode.history.push_back(sample);
+                  if (relayNode.history.size() > 60) {
+                    relayNode.history.erase(relayNode.history.begin());
+                  }
+                  if (relayID == originatorID) {
+                    relayNode.statusEmoji = "⌨️";
+                  } else {
+                    relayNode.statusEmoji = "🛰️";
+                  }
+                  Serial.printf("[LoRa Nodes] Updated/Added node: %s\n", relayID.c_str());
+                } else {
+                  Serial.println("[LoRa Nodes] RelayID is own node, not updating.");
+                }
+
+                // Update indirect nodes if applicable
+                if (originatorID != myId && relayID != myId && relayID != originatorID) {
+                  bool seenDirectly = false;
+                  if (loraNodes.find(originatorID) != loraNodes.end()) {
+                    const uint64_t FIFTEEN_MINUTES = 900000;
+                    uint64_t lastSeenDirect = loraNodes[originatorID].lastSeen;
+                    if (millis() - lastSeenDirect <= FIFTEEN_MINUTES) {
+                      seenDirectly = true;
+                    }
+                  }
+                  if (!seenDirectly) {
+                    IndirectNode indNode;
+                    indNode.originatorId = originatorID;
+                    indNode.relayId = relayID;
+                    indNode.rssi = rssi;
+                    indNode.snr = snr;
+                    indNode.lastSeen = currentTime;
+                    indirectNodes[originatorID] = indNode;
+                    Serial.printf("[Indirect Nodes] Updated indirect node: Originator: %s, Relay: %s, RSSI: %d, SNR: %.2f\n",
+                                  originatorID.c_str(), relayID.c_str(), rssi, snr);
+                  } else {
+                    Serial.printf("[Indirect Nodes] Skipped indirect update for %s because it is seen directly.\n", originatorID.c_str());
+                  }
+                }
+              }
+            }
+          }
+        }
+        radio.startReceive();
+      }
+    } else {
+      Serial.printf("[LoRa Rx] Receive failed, code %d\n", state);
+      radio.startReceive();
+    }
+  }
+
+  // Instead of checking a single fullMessage, check if the queue has messages
+  if (!loraTransmissionQueue.empty() && millis() >= loRaTransmitDelay) {
+    transmitWithDutyCycle(loraTransmissionQueue.front());
   }
 
   updateMeshData();
@@ -891,6 +942,22 @@ void receivedCallback(uint32_t from, String& message) {
   } else {
     Serial.println("[WiFi Rx] CRC valid.");
   }
+
+  // --- Only accept messages from our system ---
+// For non-heartbeat messages, verify that the first token (messageID) starts with "!M"
+if (!messageWithoutCRC.startsWith("HEARTBEAT|")) {
+  int firstSeparator = messageWithoutCRC.indexOf('|');
+  if (firstSeparator == -1) {
+    Serial.println("[WiFi Rx] Invalid message format.");
+    return;
+  }
+  String messageID = messageWithoutCRC.substring(0, firstSeparator);
+  if (!messageID.startsWith("!M")) {
+    Serial.println("[WiFi Rx] Foreign message detected, ignoring.");
+    return;
+  }
+}
+
 
   int firstSeparator = messageWithoutCRC.indexOf('|');
   int secondSeparator = messageWithoutCRC.indexOf('|', firstSeparator + 1);
@@ -1719,48 +1786,47 @@ void setupServerRoutes() {
     request->send(200, "application/json", "{\"totalCount\":" + String(getNodeCount()) + ", \"nodeId\":\"" + getCustomNodeId(getNodeId()) + "\"}");
   });
 
-server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest* request) {
+  server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest* request) {
     updateMeshData();
     String json = "{\"wifiNodes\":[";
     auto wifiNodeList = mesh.getNodeList();
     bool firstWifi = true;
     for (auto node : wifiNodeList) {
-        if (!firstWifi) json += ",";
-        json += "\"" + getCustomNodeId(node) + "\"";
-        firstWifi = false;
+      if (!firstWifi) json += ",";
+      json += "\"" + getCustomNodeId(node) + "\"";
+      firstWifi = false;
     }
     json += "], \"loraNodes\":[";
     bool firstLora = true;
     uint64_t currentTime = millis();
     const uint64_t FIFTEEN_MINUTES = 900000;
     for (auto const& [nodeId, loraNode] : loraNodes) {
-        uint64_t lastSeenTime = loraNode.lastSeen;
-        if (currentTime - lastSeenTime <= FIFTEEN_MINUTES) {
-            if (!firstLora) json += ",";
-            json += "{\"nodeId\":\"" + nodeId + "\",\"lastRSSI\":" + String(loraNode.lastRSSI)
-                  + ",\"lastSNR\":" + String(loraNode.lastSNR, 2)
-                  + ",\"lastSeen\":\"" + formatRelativeTime(currentTime - lastSeenTime) + "\""
-                  + ",\"statusEmoji\":\"" + loraNode.statusEmoji + "\"}";
-            firstLora = false;
-        }
+      uint64_t lastSeenTime = loraNode.lastSeen;
+      if (currentTime - lastSeenTime <= FIFTEEN_MINUTES) {
+        if (!firstLora) json += ",";
+        json += "{\"nodeId\":\"" + nodeId + "\",\"lastRSSI\":" + String(loraNode.lastRSSI)
+             + ",\"lastSNR\":" + String(loraNode.lastSNR, 2)
+             + ",\"lastSeen\":\"" + formatRelativeTime(currentTime - lastSeenTime) + "\""
+             + ",\"statusEmoji\":\"" + loraNode.statusEmoji + "\"}";
+        firstLora = false;
+      }
     }
     json += "], \"indirectNodes\":[";
     bool firstIndirect = true;
     for (auto const& [originatorId, indNode] : indirectNodes) {
-        // Optionally, only include recent ones:
-        if (currentTime - indNode.lastSeen <= FIFTEEN_MINUTES) {
-            if (!firstIndirect) json += ",";
-            json += "{\"originatorId\":\"" + originatorId + "\","
-                  + "\"relayId\":\"" + indNode.relayId + "\","
-                  + "\"rssi\":" + String(indNode.rssi) + ","
-                  + "\"snr\":" + String(indNode.snr, 2) + ","
-                  + "\"lastSeen\":\"" + formatRelativeTime(currentTime - indNode.lastSeen) + "\"}";
-            firstIndirect = false;
-        }
+      if (currentTime - indNode.lastSeen <= FIFTEEN_MINUTES) {
+        if (!firstIndirect) json += ",";
+        json += "{\"originatorId\":\"" + originatorId + "\","
+             + "\"relayId\":\"" + indNode.relayId + "\","
+             + "\"rssi\":" + String(indNode.rssi) + ","
+             + "\"snr\":" + String(indNode.snr, 2) + ","
+             + "\"lastSeen\":\"" + formatRelativeTime(currentTime - indNode.lastSeen) + "\"}";
+        firstIndirect = false;
+      }
     }
     json += "]}";
     request->send(200, "application/json", json);
-});
+  });
 
   // --- Updated /update route to accept an optional "target" parameter ---
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest* request) {
@@ -1802,45 +1868,44 @@ server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send_P(200, "text/html", metricsPageHtml);
   });
 
-server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
-  uint64_t now = millis();
-  const uint64_t ONE_DAY = 86400000;
-  String json = "{\"loraNodes\":[";
-  bool firstNode = true;
-  for (auto const& kv : loraNodes) {
-    if (!firstNode) json += ",";
-    firstNode = false;
-    const auto &node = kv.second;
-    int bestRssi = node.history.empty() ? node.lastRSSI : node.history[0].rssi;
-    float bestSnr = node.history.empty() ? node.lastSNR : node.history[0].snr;
-    for (const auto &sample : node.history) {
-      if (sample.rssi > bestRssi) {
-        bestRssi = sample.rssi;
+  server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
+    uint64_t now = millis();
+    const uint64_t ONE_DAY = 86400000;
+    String json = "{\"loraNodes\":[";
+    bool firstNode = true;
+    for (auto const& kv : loraNodes) {
+      if (!firstNode) json += ",";
+      firstNode = false;
+      const auto &node = kv.second;
+      int bestRssi = node.history.empty() ? node.lastRSSI : node.history[0].rssi;
+      float bestSnr = node.history.empty() ? node.lastSNR : node.history[0].snr;
+      for (const auto &sample : node.history) {
+        if (sample.rssi > bestRssi) {
+          bestRssi = sample.rssi;
+        }
+        if (sample.snr > bestSnr) {
+          bestSnr = sample.snr;
+        }
       }
-      if (sample.snr > bestSnr) {
-        bestSnr = sample.snr;
+      json += "{\"nodeId\":\"" + node.nodeId + "\",\"bestRssi\":" + String(bestRssi)
+           + ",\"bestSnr\":" + String(bestSnr, 2) + ",\"history\":[";
+      bool firstSample = true;
+      for (const auto &sample : node.history) {
+        uint64_t ageMs = now - sample.timestamp;
+        if (ageMs <= ONE_DAY && sample.rssi != 0) {
+          if (!firstSample) json += ",";
+          firstSample = false;
+          String relativeTime = formatRelativeTime(ageMs);
+          json += "{\"timestamp\":\"" + relativeTime
+               + "\",\"rssi\":" + String(sample.rssi)
+               + ",\"snr\":" + String(sample.snr, 2) + "\"}";
+        }
       }
-    }
-    json += "{\"nodeId\":\"" + node.nodeId + "\",\"bestRssi\":" + String(bestRssi)
-         + ",\"bestSnr\":" + String(bestSnr, 2) + ",\"history\":[";
-    bool firstSample = true;
-    for (const auto &sample : node.history) {
-      uint64_t ageMs = now - sample.timestamp;
-      if (ageMs <= ONE_DAY && sample.rssi != 0) {
-        if (!firstSample) json += ",";
-        firstSample = false;
-        String relativeTime = formatRelativeTime(ageMs);
-        // Removed the extra double quote after the snr value.
-        json += "{\"timestamp\":\"" + relativeTime
-             + "\",\"rssi\":" + String(sample.rssi)
-             + ",\"snr\":" + String(sample.snr, 2) + "}";
-      }
+      json += "]}";
     }
     json += "]}";
-  }
-  json += "]}";
-  request->send(200, "application/json", json);
-});
+    request->send(200, "application/json", json);
+  });
 
   // --- New /loraDetails page remains unchanged ---
   server.on("/loraDetails", HTTP_GET, [](AsyncWebServerRequest *request){
