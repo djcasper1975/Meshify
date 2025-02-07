@@ -1896,9 +1896,9 @@ void setupServerRoutes() {
           if (!firstSample) json += ",";
           firstSample = false;
           String relativeTime = formatRelativeTime(ageMs);
-          json += "{\"timestamp\":\"" + relativeTime
-               + "\",\"rssi\":" + String(sample.rssi)
-               + ",\"snr\":" + String(sample.snr, 2) + "\"}";
+json += "{\"timestamp\":\"" + relativeTime
+     + "\",\"rssi\":" + String(sample.rssi)
+     + ",\"snr\":" + String(sample.snr, 2) + "}";
         }
       }
       json += "]}";
