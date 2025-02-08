@@ -1,13 +1,13 @@
-//Test v1.00.007
-//07-02-2025
+//Test v1.00.008
+//08-02-2025
 //MAKE SURE ALL NODES USE THE SAME VERSION OR EXPECT STRANGE THINGS HAPPENING.
 //EU868 Band P (869.4 MHz - 869.65 MHz): 10%, 500 mW ERP (10% 24hr 8640 seconds = 6 mins per hour TX Time.)
 //After Accounting for Heartbeats: 20 sec after boot then every 15 mins therafter.
 //Per Hour: 136 Max Char messages within the 6-minute (360,000 ms) duty cycle
 //Per Day: 3,296 Max Char messages within the 8,640,000 ms (10% duty cycle) allowance
-//No longer sends fullmessage string. we now use a list so we dont miss anything.
-//added a 10 sec timer for when we check if theres any rx before tx sometimes it hangs in rx. fixed.
-//made random seeding a little better.
+//Indirect nodes show in nodelist and history.
+//lots of other back end tweeks to improve mesh relaying.
+//still struggling with noise on the frequency in my area causing loss of packets.
 ////////////////////////////////////////////////////////////////////////
 // M    M  EEEEE  SSSSS  H   H  M    M  I  N   N  GGGGG  L      EEEEE //
 // MM  MM  E      S      H   H  MM  MM  I  NN  N  G      L      E     //
@@ -15,6 +15,7 @@
 // M    M  E          S  H   H  M    M  I  N  NN  G   G  L      E     //
 // M    M  EEEEE  SSSSS  H   H  M    M  I  N   N   GGG   LLLLL  EEEEE //
 ////////////////////////////////////////////////////////////////////////
+
 #define HELTEC_POWER_BUTTON // Use the power button feature of Heltec
 #include <heltec_unofficial.h> // Heltec library for OLED and LoRa
 #include <painlessMesh.h>
@@ -39,10 +40,10 @@ struct TransmissionStatus {
 // Map to track retransmissions
 std::map<String, TransmissionStatus> messageTransmissions;
 
-// Call this function periodically (e.g., every 5 minutes)
+// Call this function periodically (e.g., every 1 minute)
 void cleanupMessageTransmissions() {
   uint64_t now = millis();
-  const uint64_t EXPIRY_TIME = 900000; // 15 min in ms
+  const uint64_t EXPIRY_TIME = 60000; // 1 min in ms
   for (auto it = messageTransmissions.begin(); it != messageTransmissions.end(); ) {
     if (now - it->second.timestamp > EXPIRY_TIME) {
       it = messageTransmissions.erase(it);
@@ -196,19 +197,22 @@ struct LoRaNode {
   String statusEmoji; // <-- NEW: Holds the emoji for this node
 };
 
+// Global container for direct LoRa nodes
 std::map<String, LoRaNode> loraNodes;
-// --- END METRICS HISTORY ---
 
 // --- NEW: Structure for Indirect Nodes ---
+// (Modified to include a history vector.)
 struct IndirectNode {
   String originatorId;   // The node that originally sent the message (which we never hear directly)
   String relayId;        // The node that relayed the message to us
   int rssi;              // RSSI as measured from the relay’s transmission
   float snr;             // SNR as measured from the relay’s transmission
   uint64_t lastSeen;     // Timestamp when we last received a relayed message from this originator via the relay
+  String statusEmoji;    // <-- NEW: Holds the emoji for this indirect node
+  std::vector<NodeMetricsSample> history;  // NEW: History samples (up to 24 hours)
 };
 
-// Global container to hold indirect nodes keyed by the originator's ID
+// Global container to hold indirect nodes keyed by a composite key (originatorID-relayID)
 std::map<String, IndirectNode> indirectNodes;
 
 unsigned long lastCleanupTime = 0;
@@ -221,6 +225,20 @@ void cleanupLoRaNodes() {
     if (currentTime - it->second.lastSeen > timeout) {
       Serial.printf("[LoRa Nodes] Removing inactive LoRa node: %s\n", it->first.c_str());
       it = loraNodes.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+// --- NEW: Cleanup function for Indirect Nodes ---
+void cleanupIndirectNodes() {
+  uint64_t currentTime = millis();
+  const uint64_t timeout = 86400000; // 24 hours
+  for (auto it = indirectNodes.begin(); it != indirectNodes.end();) {
+    if (currentTime - it->second.lastSeen > timeout) {
+      Serial.printf("[Indirect Nodes] Removing inactive indirect node: %s\n", it->first.c_str());
+      it = indirectNodes.erase(it);
     } else {
       ++it;
     }
@@ -332,7 +350,7 @@ void scheduleLoRaTransmission(String message) {
         // Instead of overwriting a single fullMessage, push it onto the queue.
         loraTransmissionQueue.push_back(updatedMessage);
         if (loraTransmissionQueue.size() == 1) {
-          loRaTransmitDelay = millis() + random(2201, 5000);
+          loRaTransmitDelay = millis() + random(1201, 5000);
         }
         Serial.printf("[LoRa Schedule] Scheduled relay from %s after %lu ms: %s\n",
                       newRelayID.c_str(), loRaTransmitDelay - millis(), updatedMessage.c_str());
@@ -340,7 +358,7 @@ void scheduleLoRaTransmission(String message) {
         // This is the originator. Schedule the original message for transmission.
         loraTransmissionQueue.push_back(message);
         if (loraTransmissionQueue.size() == 1) {
-          loRaTransmitDelay = millis() + random(2201, 5000);
+          loRaTransmitDelay = millis() + random(1201, 5000);
         }
         Serial.printf("[LoRa Schedule] Scheduled original message after %lu ms: %s\n",
                       loRaTransmitDelay - millis(), message.c_str());
@@ -405,9 +423,9 @@ void showScrollingMonospacedAsciiArt() {
 
   String lines[5];
   lines[0] = "M    M  EEEEE  SSSSS  H   H  M    M  I  N   N  GGGGG  L      EEEEE  ";
-  lines[1] = "MM  MM  E      S      H   H  MM  MM  I  NN  N  G      L      E      ";
+  lines[1] = "MM  MM  E      S      H   H  MM  MM  I  NN  N  G      L      E     ";
   lines[2] = "M MM M  EEEE   SSSSS  HHHHH  M MM M  I  N N N  G  GG  L      EEEE   ";
-  lines[3] = "M    M  E          S  H   H  M    M  I  N  NN  G   G  L      E      ";
+  lines[3] = "M    M  E          S  H   H  M    M  I  N  NN  G   G  L      E     ";
   lines[4] = "M    M  EEEEE  SSSSS  H   H  M    M  I  N   N   GGG   LLLLL  EEEEE  ";
 
   const int screenWidth  = 128;
@@ -496,43 +514,50 @@ void displayCarousel() {
   unsigned long currentMillis = millis();
   if (currentMillis - lastCarouselChange >= carouselInterval) {
     lastCarouselChange = currentMillis;
-    carouselIndex++;
 
-    if (messages.empty()) {
+    // Filter messages: Only show private messages for this node
+    String myId = getCustomNodeId(getNodeId());
+    std::vector<Message> filteredMessages;
+    
+    for (const auto& msg : messages) {
+      if (msg.recipient != "ALL" && (msg.recipient == myId || msg.nodeId == myId)) {
+        filteredMessages.push_back(msg);
+      }
+    }
+
+    if (filteredMessages.empty()) {
+      // No private messages for this node, reset carousel to main screen
       carouselIndex = 0;
     } else {
-      if (carouselIndex > (int)messages.size()) {
+      // Loop through filtered messages
+      carouselIndex++;
+      if (carouselIndex > (int)filteredMessages.size()) {
         carouselIndex = 0;
       }
     }
-  }
 
-  display.clear();
-  display.setFont(ArialMT_Plain_10);
+    display.clear();
+    display.setFont(ArialMT_Plain_10);
 
-  if (carouselIndex == 0) {
-    drawMainScreen(-1);
-  } else {
-    int msgIndex = carouselIndex - 1;
-    if (msgIndex < (int)messages.size()) {
-      String nodeLine = "Node: " + messages[msgIndex].nodeId;
-      display.drawString(0, 0, nodeLine);
+    if (carouselIndex == 0) {
+      drawMainScreen(-1);
+    } else {
+      int msgIndex = carouselIndex - 1;
+      if (msgIndex < (int)filteredMessages.size()) {
+        String nodeLine = "Node: " + filteredMessages[msgIndex].nodeId;
+        display.drawString(0, 0, nodeLine);
 
-      String nameLine = "Name: " + messages[msgIndex].sender;
-      display.drawString(0, 13, nameLine);
+        String nameLine = "Name: " + filteredMessages[msgIndex].sender;
+        display.drawString(0, 13, nameLine);
 
-      // If the message is private, add an indicator.
-      if (messages[msgIndex].recipient != "ALL") {
         display.drawString(0, 26, "[Private]");
-        display.drawString(0, 36, messages[msgIndex].content);
-      } else {
-        display.drawStringMaxWidth(0, 26, 128, messages[msgIndex].content);
+        display.drawString(0, 36, filteredMessages[msgIndex].content);
       }
     }
+    display.display();
   }
-
-  display.display();
 }
+
 
 long lastTxTimeMillisVar = -1;
 
@@ -550,8 +575,8 @@ void transmitWithDutyCycle(const String& message) {
     if (rxCheckStart == 0) {
       rxCheckStart = millis();  // Start timer when RX is first detected.
     }
-    if (millis() - rxCheckStart >= 10000) {  // 10-second timeout reached.
-      Serial.println("[LoRa Tx] RX appears stuck for 10 seconds. Forcing transmission...");
+    if (millis() - rxCheckStart >= 5000) {  // 5-second timeout reached.
+      Serial.println("[LoRa Tx] RX appears stuck for 5 seconds. Forcing transmission...");
       // Since SX1262 doesn't have stopReceive(), we simply restart RX mode.
       radio.startReceive();  
       rxCheckStart = 0;  // Reset timer.
@@ -578,7 +603,7 @@ void transmitWithDutyCycle(const String& message) {
     if (!loraTransmissionQueue.empty()) {
       loraTransmissionQueue.erase(loraTransmissionQueue.begin());
       if (!loraTransmissionQueue.empty()) {
-        loRaTransmitDelay = millis() + random(2201, 5000);
+        loRaTransmitDelay = millis() + random(1201, 5000);
       }
     }
     return;
@@ -612,7 +637,7 @@ void transmitWithDutyCycle(const String& message) {
     }
     // If more messages remain, schedule the next transmission.
     if (!loraTransmissionQueue.empty()) {
-      loRaTransmitDelay = millis() + random(2201, 5000);
+      loRaTransmitDelay = millis() + random(1201, 5000);
     }
   } else {
     Serial.printf("[LoRa Tx] Transmission failed with error code: %i\n", transmitStatus);
@@ -692,6 +717,12 @@ void setup() {
   RADIOLIB_OR_HALT(radio.setCodingRate(CODING_RATE));
   RADIOLIB_OR_HALT(radio.setOutputPower(TRANSMIT_POWER));
 
+  // Disable hardware CRC so that only our manual CRC is used.
+  //radio.setCRC(false);
+
+  //  -- Set your unique sync word here --
+ // radio.setSyncWord(0x12);  // e.g., 0x12
+
   radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF);
   delay(2000);
 
@@ -708,8 +739,13 @@ void setup() {
 
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-// Combine analog noise and a high-resolution timer:
-randomSeed(analogRead(0) ^ micros());
+  // Combine analog noise and a high-resolution timer:
+  // -------------------
+  // IMPROVED RANDOM SEED
+  // -------------------
+  uint32_t nodeId = getNodeId();
+  uint32_t uniqueSeed = nodeId ^ analogRead(0) ^ micros();  // XOR for randomness
+  randomSeed(uniqueSeed);
 }
 
 void loop() {
@@ -748,22 +784,22 @@ void loop() {
         } else {
           Serial.println("[LoRa Rx] CRC valid.");
 
-        // --- Only process messages from our system ---
-// For non-heartbeat messages, check that the first token (messageID) starts with our expected prefix.
-if (!messageWithoutCRC.startsWith("HEARTBEAT|")) {
-  int firstSeparator = messageWithoutCRC.indexOf('|');
-  if (firstSeparator == -1) {
-    Serial.println("[LoRa Rx] Invalid message format.");
-    radio.startReceive();
-    return;
-  }
-  String messageID = messageWithoutCRC.substring(0, firstSeparator);
-  if (!messageID.startsWith("!M")) {  // Our system-generated IDs start with "!M"
-    Serial.println("[LoRa Rx] Foreign message detected, ignoring.");
-    radio.startReceive();
-    return;
-  }
-}
+          // --- Only process messages from our system ---
+          // For non-heartbeat messages, check that the first token (messageID) starts with our expected prefix.
+          if (!messageWithoutCRC.startsWith("HEARTBEAT|")) {
+            int firstSeparator = messageWithoutCRC.indexOf('|');
+            if (firstSeparator == -1) {
+              Serial.println("[LoRa Rx] Invalid message format.");
+              radio.startReceive();
+              return;
+            }
+            String messageID = messageWithoutCRC.substring(0, firstSeparator);
+            if (!messageID.startsWith("!M")) {  // Our system-generated IDs start with "!M"
+              Serial.println("[LoRa Rx] Foreign message detected, ignoring.");
+              radio.startReceive();
+              return;
+            }
+          }
 
           // --- Heartbeat Handling (Unchanged) ---
           if (messageWithoutCRC.startsWith("HEARTBEAT|")) {
@@ -826,7 +862,7 @@ if (!messageWithoutCRC.startsWith("HEARTBEAT|")) {
                   Serial.println("[LoRa Rx] Private message not for me, ignoring display.");
                 }
                 // --- Use the new "relayed" flag to decide whether to schedule a relay ---
-                if (!messageTransmissions[messageID].relayed) {
+                if (!messageTransmissions[messageID].relayed && (relayID != myId)) {
                   scheduleLoRaTransmission(message);
                 }
                 uint64_t currentTime = millis();
@@ -854,24 +890,41 @@ if (!messageWithoutCRC.startsWith("HEARTBEAT|")) {
                   Serial.println("[LoRa Nodes] RelayID is own node, not updating.");
                 }
 
-                // Update indirect nodes if applicable
+                // Update indirect nodes if applicable (allow separate entries per relay)
                 if (originatorID != myId && relayID != myId && relayID != originatorID) {
                   bool seenDirectly = false;
                   if (loraNodes.find(originatorID) != loraNodes.end()) {
-                    const uint64_t FIFTEEN_MINUTES = 900000;
+                    const uint64_t THIRTY_SECONDS = 30000;
                     uint64_t lastSeenDirect = loraNodes[originatorID].lastSeen;
-                    if (millis() - lastSeenDirect <= FIFTEEN_MINUTES) {
+                    if (millis() - lastSeenDirect <= THIRTY_SECONDS) {
                       seenDirectly = true;
                     }
                   }
                   if (!seenDirectly) {
-                    IndirectNode indNode;
-                    indNode.originatorId = originatorID;
-                    indNode.relayId = relayID;
-                    indNode.rssi = rssi;
-                    indNode.snr = snr;
-                    indNode.lastSeen = currentTime;
-                    indirectNodes[originatorID] = indNode;
+                    NodeMetricsSample sample = { currentTime, rssi, snr };
+                    String key = originatorID + "-" + relayID; // Composite key for separate relay entries
+                    auto it = indirectNodes.find(key);
+                    if (it != indirectNodes.end()) {
+                      // Update existing indirect node entry for this relay
+                      it->second.lastSeen = currentTime;
+                      it->second.rssi = rssi;
+                      it->second.snr = snr;
+                      it->second.history.push_back(sample);
+                      if (it->second.history.size() > 60) {
+                        it->second.history.erase(it->second.history.begin());
+                      }
+                    } else {
+                      // Create a new indirect node entry for this relay
+                      IndirectNode indNode;
+                      indNode.originatorId = originatorID;
+                      indNode.relayId = relayID;
+                      indNode.rssi = rssi;
+                      indNode.snr = snr;
+                      indNode.lastSeen = currentTime;
+                      indNode.statusEmoji = "🛰️";
+                      indNode.history.push_back(sample);
+                      indirectNodes[key] = indNode;
+                    }
                     Serial.printf("[Indirect Nodes] Updated indirect node: Originator: %s, Relay: %s, RSSI: %d, SNR: %.2f\n",
                                   originatorID.c_str(), relayID.c_str(), rssi, snr);
                   } else {
@@ -899,8 +952,11 @@ if (!messageWithoutCRC.startsWith("HEARTBEAT|")) {
   displayCarousel();
   dnsServer.processNextRequest();
 
+  // --- Cleanup: Remove old LoRa nodes, indirect nodes, and transmission statuses ---
   if (millis() - lastCleanupTime >= cleanupInterval) {
-    cleanupLoRaNodes();
+    cleanupLoRaNodes();          
+    cleanupIndirectNodes();  // <-- NEW: Clean up indirect nodes every 24 hours
+    cleanupMessageTransmissions();
     lastCleanupTime = millis();
   }
 
@@ -945,21 +1001,17 @@ void receivedCallback(uint32_t from, String& message) {
 
   // --- Only accept messages from our system ---
 // For non-heartbeat messages, verify that the first token (messageID) starts with "!M"
-if (!messageWithoutCRC.startsWith("HEARTBEAT|")) {
   int firstSeparator = messageWithoutCRC.indexOf('|');
   if (firstSeparator == -1) {
     Serial.println("[WiFi Rx] Invalid message format.");
     return;
   }
   String messageID = messageWithoutCRC.substring(0, firstSeparator);
-  if (!messageID.startsWith("!M")) {
+  if (!messageWithoutCRC.startsWith("HEARTBEAT|") && !messageID.startsWith("!M")) {
     Serial.println("[WiFi Rx] Foreign message detected, ignoring.");
     return;
   }
-}
 
-
-  int firstSeparator = messageWithoutCRC.indexOf('|');
   int secondSeparator = messageWithoutCRC.indexOf('|', firstSeparator + 1);
   int thirdSeparator = messageWithoutCRC.indexOf('|', secondSeparator + 1);
   int fourthSeparator = messageWithoutCRC.indexOf('|', thirdSeparator + 1);
@@ -971,7 +1023,7 @@ if (!messageWithoutCRC.startsWith("HEARTBEAT|")) {
     return;
   }
 
-  String messageID = messageWithoutCRC.substring(0, firstSeparator);
+  messageID = messageWithoutCRC.substring(0, firstSeparator);
   String originatorID = messageWithoutCRC.substring(firstSeparator + 1, secondSeparator);
   String senderID = messageWithoutCRC.substring(secondSeparator + 1, thirdSeparator);
   String recipientID = messageWithoutCRC.substring(thirdSeparator + 1, fourthSeparator);
@@ -994,8 +1046,9 @@ if (!messageWithoutCRC.startsWith("HEARTBEAT|")) {
   }
 
   // --- Use the new "relayed" flag to schedule a relay if not already done ---
+  String myIdForRelay = getCustomNodeId(getNodeId());
   auto& status = messageTransmissions[messageID];
-  if (!status.relayed) {
+  if (!status.relayed && (relayID != myIdForRelay)) {
     scheduleLoRaTransmission(message);
   }
 }
@@ -1372,7 +1425,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
       font-size: 0.85em;
       color: #333;
       box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-      position: relative; /* Enable relative positioning for emoji */
+      position: relative;
     }
     .node.wifi {
       background-color: #e7f0ff;
@@ -1403,7 +1456,6 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
       margin-left: 20px;
       font-size: 0.9em;
     }
-    /* Styling for the status emoji in the bottom right */
     .node-emoji {
       position: absolute;
       bottom: 5px;
@@ -1443,7 +1495,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
       fetch('/nodesData')
         .then(response => response.json())
         .then(data => {
-          // WiFi Nodes Section
+          // --- WiFi Nodes Section (unchanged) ---
           const wifiUl = document.getElementById('wifiNodeList');
           wifiUl.innerHTML = '';
           const wifiCount = data.wifiNodes.length;
@@ -1461,7 +1513,7 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
             wifiUl.appendChild(li);
           });
 
-          // Direct LoRa Nodes Section
+          // --- Direct LoRa Nodes Section (unchanged) ---
           const loraUl = document.getElementById('loraNodeList');
           loraUl.innerHTML = '';
           const loraCount = data.loraNodes.length;
@@ -1483,15 +1535,24 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
             loraUl.appendChild(li);
           });
 
-          // Indirect (Relayed) Nodes Section
+          // --- Indirect (Relayed) Nodes Section ---
+          // Instead of listing every relay entry, we group them by the originator
+          // and only show the most recent relay for each originator.
           const indirectUl = document.getElementById('indirectNodeList');
-          indirectUl.innerHTML = '';
-          const indirectCount = data.indirectNodes.length;
-          document.getElementById('indirectCount').innerText = 'Indirect Nodes (Relayed) Active: ' + indirectCount;
-          data.indirectNodes.forEach((node, index) => {
+          indirectUl.innerHTML = "";
+          const groupedIndirect = {};
+          data.indirectNodes.forEach((node) => {
+            let originator = node.originatorId;
+            // If this originator is not yet in the group or this node's lastSeen is more recent, update it.
+            if (!groupedIndirect[originator] || node.lastSeen > groupedIndirect[originator].lastSeen) {
+              groupedIndirect[originator] = node;
+            }
+          });
+          const groupedIndirectArray = Object.values(groupedIndirect);
+          document.getElementById('indirectCount').innerText = 'Indirect Nodes (Relayed) Active: ' + groupedIndirectArray.length;
+          groupedIndirectArray.forEach((node, index) => {
             const li = document.createElement('li');
             li.classList.add('node');
-            // Optional: Use a different background and border color for indirect nodes.
             li.style.backgroundColor = '#f9f9f9';
             li.style.borderColor = '#999';
             li.innerHTML = `
@@ -1500,10 +1561,11 @@ const char nodesPageHtml[] PROGMEM = R"rawliteral(
                 <span>${node.originatorId}</span>
               </div>
               <div class="node-info">
-                Relayed by: <a href="/loraDetails?nodeId=${encodeURIComponent(node.relayId)}">${node.relayId}</a><br>
+                Last Relay: <a href="/loraDetails?nodeId=${encodeURIComponent(node.relayId)}">${node.relayId}</a><br>
                 RSSI: ${node.rssi} dBm, SNR: ${node.snr} dB<br>
                 Last seen: ${node.lastSeen}
               </div>
+              <div class="node-emoji">${node.statusEmoji || ""}</div>
             `;
             indirectUl.appendChild(li);
           });
@@ -1546,14 +1608,14 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LoRa Signal History</title>
   <style>
     body {
       font-family: Arial, sans-serif;
       background-color: #f4f7f6;
-      margin: 0; 
+      margin: 0;
       padding: 20px;
     }
     h2 {
@@ -1566,6 +1628,7 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
       color: #555;
       margin-top: 10px;
     }
+    /* Container for each node (direct or originator for indirect) */
     .node-block {
       background-color: #fff;
       border: 2px solid #ccc;
@@ -1574,6 +1637,14 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
       max-width: 600px;
       padding: 10px;
       box-sizing: border-box;
+    }
+    /* Sub-container for relay entries within an originator */
+    .sub-node-block {
+      background-color: #f9f9f9;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      margin: 10px 0;
+      padding: 8px;
     }
     .node-title {
       font-weight: bold;
@@ -1593,10 +1664,6 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
     th {
       background-color: #eee;
     }
-    .timestamp {
-      font-size: 0.85em;
-      color: #666;
-    }
     .nav-links {
       display: flex;
       justify-content: center;
@@ -1614,90 +1681,164 @@ const char metricsPageHtml[] PROGMEM = R"rawliteral(
     }
   </style>
   <script>
+    // On page load, fetch the device count and metrics history data.
     window.onload = function() {
-      fetch('/deviceCount')
+      fetch("/deviceCount")
         .then(response => response.json())
         .then(data => {
-          const nodeIdElement = document.getElementById('nodeIdDisplay');
+          const nodeIdElement = document.getElementById("nodeIdDisplay");
           nodeIdElement.textContent = `Node ID: ${data.nodeId}`;
         })
-        .catch(error => console.error('Error fetching Node ID:', error));
+        .catch(error => console.error("Error fetching Node ID:", error));
 
       fetchHistory();
-      setInterval(fetchHistory, 5000); 
+      setInterval(fetchHistory, 5000);
     };
 
     function fetchHistory() {
-      fetch('/metricsHistoryData')
+      fetch("/metricsHistoryData")
         .then(response => response.json())
         .then(data => {
-          const container = document.getElementById('historyContainer');
-          container.innerHTML = '';
+          const container = document.getElementById("historyContainer");
+          container.innerHTML = "";
 
-          data.loraNodes.forEach(node => {
-            const nodeBlock = document.createElement('div');
-            nodeBlock.classList.add('node-block');
+          // --- Direct LoRa Nodes History Section ---
+          if (data.loraNodes && data.loraNodes.length > 0) {
+            const directHeader = document.createElement("h3");
+            directHeader.textContent = "Direct LoRa Nodes History";
+            container.appendChild(directHeader);
 
-            const nodeTitle = document.createElement('div');
-            nodeTitle.classList.add('node-title');
-            nodeTitle.textContent = `Node ID: ${node.nodeId}`;
-            nodeBlock.appendChild(nodeTitle);
+            data.loraNodes.forEach(node => {
+              const nodeBlock = document.createElement("div");
+              nodeBlock.classList.add("node-block");
 
-            const nodeTable = document.createElement('table');
-            const nodeHeader = document.createElement('thead');
-            nodeHeader.innerHTML = `
-              <tr>
-                <th>Best Signal RSSI (dBm)</th>
-                <th>Best Signal SNR (dB)</th>
-              </tr>`;
-            nodeTable.appendChild(nodeHeader);
+              // Header for direct node
+              const nodeTitle = document.createElement("div");
+              nodeTitle.classList.add("node-title");
+              nodeTitle.textContent = `Node ID: ${node.nodeId}`;
+              nodeBlock.appendChild(nodeTitle);
 
-            const nodeBody = document.createElement('tbody');
-            const nodeRow = document.createElement('tr');
-            nodeRow.innerHTML = `
-              <td>${node.bestRssi}</td>
-              <td>${node.bestSnr}</td>`;
-            nodeBody.appendChild(nodeRow);
-            nodeTable.appendChild(nodeBody);
+              // Summary table (best signal)
+              const summaryTable = document.createElement("table");
+              const summaryHeader = document.createElement("thead");
+              summaryHeader.innerHTML = `
+                <tr>
+                  <th>Best Signal RSSI (dBm)</th>
+                  <th>Best Signal SNR (dB)</th>
+                </tr>`;
+              summaryTable.appendChild(summaryHeader);
+              const summaryBody = document.createElement("tbody");
+              const summaryRow = document.createElement("tr");
+              summaryRow.innerHTML = `<td>${node.bestRssi}</td><td>${node.bestSnr}</td>`;
+              summaryBody.appendChild(summaryRow);
+              summaryTable.appendChild(summaryBody);
+              nodeBlock.appendChild(summaryTable);
 
-            nodeBlock.appendChild(nodeTable);
+              // History table for node
+              const historyTable = document.createElement("table");
+              const historyHeader = document.createElement("thead");
+              historyHeader.innerHTML = `
+                <tr>
+                  <th>Time Ago</th>
+                  <th>RSSI (dBm)</th>
+                  <th>SNR (dB)</th>
+                </tr>`;
+              historyTable.appendChild(historyHeader);
+              const historyBody = document.createElement("tbody");
+              node.history.forEach(sample => {
+                const row = document.createElement("tr");
+                row.innerHTML = `<td>${sample.timestamp}</td><td>${sample.rssi}</td><td>${sample.snr}</td>`;
+                historyBody.appendChild(row);
+              });
+              historyTable.appendChild(historyBody);
+              nodeBlock.appendChild(historyTable);
 
-            const historyTable = document.createElement('table');
-            const historyHeader = document.createElement('thead');
-            historyHeader.innerHTML = `
-              <tr>
-                <th>Time Ago</th>
-                <th>RSSI (dBm)</th>
-                <th>SNR (dB)</th>
-              </tr>`;
-            historyTable.appendChild(historyHeader);
-
-            const historyBody = document.createElement('tbody');
-            node.history.forEach(sample => {
-              const row = document.createElement('tr');
-
-              const tsCell = document.createElement('td');
-              tsCell.textContent = sample.timestamp;
-              row.appendChild(tsCell);
-
-              const rssiCell = document.createElement('td');
-              rssiCell.textContent = sample.rssi;
-              row.appendChild(rssiCell);
-
-              const snrCell = document.createElement('td');
-              snrCell.textContent = sample.snr;
-              row.appendChild(snrCell);
-
-              historyBody.appendChild(row);
+              container.appendChild(nodeBlock);
             });
-            historyTable.appendChild(historyBody);
-            nodeBlock.appendChild(historyTable);
+          }
 
-            container.appendChild(nodeBlock);
-          });
+          // --- Indirect Nodes History Section (Grouped by Originator) ---
+          if (data.indirectNodes && data.indirectNodes.length > 0) {
+            // Group indirect node records by originator (each record has a 'nodeId' representing the originator)
+            const groupedIndirect = {};
+            data.indirectNodes.forEach(indirect => {
+              let originator = indirect.nodeId;
+              if (!groupedIndirect[originator]) {
+                groupedIndirect[originator] = [];
+              }
+              groupedIndirect[originator].push(indirect);
+            });
+
+            const indirectHeader = document.createElement("h3");
+            indirectHeader.textContent = "Indirect Nodes History (Grouped by Originator)";
+            container.appendChild(indirectHeader);
+
+            // For each originator, create a container with a relays table
+            Object.keys(groupedIndirect).forEach(originator => {
+              const group = groupedIndirect[originator];
+              const originatorBlock = document.createElement("div");
+              originatorBlock.classList.add("node-block");
+
+              // Originator header (like direct node header)
+              const originatorTitle = document.createElement("div");
+              originatorTitle.classList.add("node-title");
+              originatorTitle.textContent = `Originator: ${originator}`;
+              originatorBlock.appendChild(originatorTitle);
+
+              // For each relay associated with this originator, render its own summary and history tables
+              group.forEach(relay => {
+                const relayBlock = document.createElement("div");
+                relayBlock.classList.add("sub-node-block");
+
+                const relayTitle = document.createElement("div");
+                relayTitle.classList.add("node-title");
+                relayTitle.textContent = `Relay ID: ${relay.relayId}`;
+                relayBlock.appendChild(relayTitle);
+
+                // Relay summary table
+                const relaySummaryTable = document.createElement("table");
+                const relaySummaryHeader = document.createElement("thead");
+                relaySummaryHeader.innerHTML = `
+                  <tr>
+                    <th>Best Signal RSSI (dBm)</th>
+                    <th>Best Signal SNR (dB)</th>
+                  </tr>`;
+                relaySummaryTable.appendChild(relaySummaryHeader);
+                const relaySummaryBody = document.createElement("tbody");
+                const relaySummaryRow = document.createElement("tr");
+                relaySummaryRow.innerHTML = `<td>${relay.bestRssi}</td><td>${relay.bestSnr}</td>`;
+                relaySummaryBody.appendChild(relaySummaryRow);
+                relaySummaryTable.appendChild(relaySummaryBody);
+                relayBlock.appendChild(relaySummaryTable);
+
+                // Relay history table
+                const relayHistoryTable = document.createElement("table");
+                const relayHistoryHeader = document.createElement("thead");
+                relayHistoryHeader.innerHTML = `
+                  <tr>
+                    <th>Time Ago</th>
+                    <th>RSSI (dBm)</th>
+                    <th>SNR (dB)</th>
+                  </tr>`;
+                relayHistoryTable.appendChild(relayHistoryHeader);
+                const relayHistoryBody = document.createElement("tbody");
+                relay.history.forEach(sample => {
+                  const row = document.createElement("tr");
+                  row.innerHTML = `<td>${sample.timestamp}</td><td>${sample.rssi}</td><td>${sample.snr}</td>`;
+                  relayHistoryBody.appendChild(row);
+                });
+                relayHistoryTable.appendChild(relayHistoryBody);
+                relayBlock.appendChild(relayHistoryTable);
+
+                originatorBlock.appendChild(relayBlock);
+              });
+
+              container.appendChild(originatorBlock);
+            });
+          }
         })
         .catch(error => {
-          console.error('Error fetching metrics history:', error);
+          console.error("Error fetching metrics history:", error);
         });
     }
   </script>
@@ -1786,6 +1927,7 @@ void setupServerRoutes() {
     request->send(200, "application/json", "{\"totalCount\":" + String(getNodeCount()) + ", \"nodeId\":\"" + getCustomNodeId(getNodeId()) + "\"}");
   });
 
+  // --- Updated /nodesData route for indirect nodes ---
   server.on("/nodesData", HTTP_GET, [](AsyncWebServerRequest* request) {
     updateMeshData();
     String json = "{\"wifiNodes\":[";
@@ -1813,14 +1955,13 @@ void setupServerRoutes() {
     }
     json += "], \"indirectNodes\":[";
     bool firstIndirect = true;
-    for (auto const& [originatorId, indNode] : indirectNodes) {
-      if (currentTime - indNode.lastSeen <= FIFTEEN_MINUTES) {
+    for (auto const& kv : indirectNodes) {
+      const auto &node = kv.second;
+      if (currentTime - node.lastSeen <= FIFTEEN_MINUTES) {
         if (!firstIndirect) json += ",";
-        json += "{\"originatorId\":\"" + originatorId + "\","
-             + "\"relayId\":\"" + indNode.relayId + "\","
-             + "\"rssi\":" + String(indNode.rssi) + ","
-             + "\"snr\":" + String(indNode.snr, 2) + ","
-             + "\"lastSeen\":\"" + formatRelativeTime(currentTime - indNode.lastSeen) + "\"}";
+        json += "{\"originatorId\":\"" + node.originatorId + "\",\"relayId\":\"" + node.relayId + "\",";
+        json += "\"rssi\":" + String(node.rssi) + ",\"snr\":" + String(node.snr, 2) + ",\"lastSeen\":\"" + formatRelativeTime(currentTime - node.lastSeen) + "\",";
+        json += "\"statusEmoji\":\"" + node.statusEmoji + "\"}";
         firstIndirect = false;
       }
     }
@@ -1868,44 +2009,83 @@ void setupServerRoutes() {
     request->send_P(200, "text/html", metricsPageHtml);
   });
 
-  server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
-    uint64_t now = millis();
-    const uint64_t ONE_DAY = 86400000;
-    String json = "{\"loraNodes\":[";
-    bool firstNode = true;
-    for (auto const& kv : loraNodes) {
-      if (!firstNode) json += ",";
-      firstNode = false;
-      const auto &node = kv.second;
-      int bestRssi = node.history.empty() ? node.lastRSSI : node.history[0].rssi;
-      float bestSnr = node.history.empty() ? node.lastSNR : node.history[0].snr;
-      for (const auto &sample : node.history) {
-        if (sample.rssi > bestRssi) {
-          bestRssi = sample.rssi;
-        }
-        if (sample.snr > bestSnr) {
-          bestSnr = sample.snr;
-        }
+server.on("/metricsHistoryData", HTTP_GET, [](AsyncWebServerRequest* request) {
+  uint64_t now = millis();
+  const uint64_t ONE_DAY = 86400000;
+  String json = "{";
+  // --- Direct (LoRa) Nodes History ---
+  json += "\"loraNodes\":[";
+  bool firstNode = true;
+  for (auto const& kv : loraNodes) {
+    if (!firstNode) json += ",";
+    firstNode = false;
+    const auto &node = kv.second;
+    int bestRssi = node.history.empty() ? node.lastRSSI : node.history[0].rssi;
+    float bestSnr = node.history.empty() ? node.lastSNR : node.history[0].snr;
+    for (const auto &sample : node.history) {
+      if (sample.rssi > bestRssi) {
+        bestRssi = sample.rssi;
       }
-      json += "{\"nodeId\":\"" + node.nodeId + "\",\"bestRssi\":" + String(bestRssi)
-           + ",\"bestSnr\":" + String(bestSnr, 2) + ",\"history\":[";
-      bool firstSample = true;
-      for (const auto &sample : node.history) {
-        uint64_t ageMs = now - sample.timestamp;
-        if (ageMs <= ONE_DAY && sample.rssi != 0) {
-          if (!firstSample) json += ",";
-          firstSample = false;
-          String relativeTime = formatRelativeTime(ageMs);
-json += "{\"timestamp\":\"" + relativeTime
-     + "\",\"rssi\":" + String(sample.rssi)
-     + ",\"snr\":" + String(sample.snr, 2) + "}";
-        }
+      if (sample.snr > bestSnr) {
+        bestSnr = sample.snr;
       }
-      json += "]}";
+    }
+    json += "{\"nodeId\":\"" + node.nodeId + "\",\"bestRssi\":" + String(bestRssi)
+         + ",\"bestSnr\":" + String(bestSnr, 2) + ",\"history\":[";
+    bool firstSample = true;
+    for (const auto &sample : node.history) {
+      uint64_t ageMs = now - sample.timestamp;
+      if (ageMs <= ONE_DAY && sample.rssi != 0) {
+        if (!firstSample) json += ",";
+        firstSample = false;
+        String relativeTime = formatRelativeTime(ageMs);
+        json += "{\"timestamp\":\"" + relativeTime
+             + "\",\"rssi\":" + String(sample.rssi)
+             + ",\"snr\":" + String(sample.snr, 2) + "}";
+      }
     }
     json += "]}";
-    request->send(200, "application/json", json);
-  });
+  }
+  json += "],";
+
+  // --- Indirect Nodes History ---
+  json += "\"indirectNodes\":[";
+  bool firstIndirect = true;
+  for (auto const& kv : indirectNodes) {
+    const auto &node = kv.second;
+    if (!firstIndirect) json += ",";
+    firstIndirect = false;
+    int bestRssi = node.history.empty() ? node.rssi : node.history[0].rssi;
+    float bestSnr = node.history.empty() ? node.snr : node.history[0].snr;
+    for (const auto &sample : node.history) {
+      if (sample.rssi > bestRssi) {
+        bestRssi = sample.rssi;
+      }
+      if (sample.snr > bestSnr) {
+        bestSnr = sample.snr;
+      }
+    }
+    json += "{\"nodeId\":\"" + node.originatorId + "\",\"relayId\":\"" + node.relayId + "\",";
+    json += "\"bestRssi\":" + String(bestRssi) + ",\"bestSnr\":" + String(bestSnr, 2) + ",\"history\":[";
+    
+    bool firstSample = true;
+    for (const auto &sample : node.history) {
+      uint64_t ageMs = now - sample.timestamp;
+      if (ageMs <= ONE_DAY && sample.rssi != 0) {
+        if (!firstSample) json += ",";
+        firstSample = false;
+        String relativeTime = formatRelativeTime(ageMs);
+        json += "{\"timestamp\":\"" + relativeTime
+             + "\",\"rssi\":" + String(sample.rssi)
+             + ",\"snr\":" + String(sample.snr, 2) + "}";
+      }
+    }
+    json += "],\"statusEmoji\":\"" + node.statusEmoji + "\"}";
+  }
+  json += "]";
+  json += "}";
+  request->send(200, "application/json", json);
+});
 
   // --- New /loraDetails page remains unchanged ---
   server.on("/loraDetails", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1918,6 +2098,7 @@ json += "{\"timestamp\":\"" + relativeTime
       "body { font-family: Arial, sans-serif; background-color: #f4f7f6; margin:0; padding:20px; }"
       ".nav-links { text-align:center; margin-bottom:20px; background-color:#eee; padding:10px; }"
       ".nav-links a { margin:0 15px; text-decoration:none; color:#007bff; font-weight:bold; }"
+      ".nav-links a:hover { text-decoration:underline; }"
       "h2 { text-align:center; color:#333; }"
       ".node-list { max-width:600px; margin:10px auto; background:#fff; padding:10px; border-radius:8px; }"
       ".node-link { display:block; padding:8px; border-bottom:1px solid #ccc; color:#007bff; text-decoration:none; }"
@@ -1961,10 +2142,11 @@ json += "{\"timestamp\":\"" + relativeTime
       "body { font-family: Arial, sans-serif; background-color: #f4f7f6; margin:0; padding:20px; }"
       ".nav-links { text-align:center; margin-bottom:20px; background-color:#eee; padding:10px; }"
       ".nav-links a { margin:0 15px; text-decoration:none; color:#007bff; font-weight:bold; }"
+      ".nav-links a:hover { text-decoration:underline; }"
       "h2 { text-align:center; color:#333; }"
       ".details { max-width:600px; margin:10px auto; background:#fff; padding:10px; border-radius:8px; }"
       "table { border-collapse: collapse; width: 100%; margin-bottom: 10px; }"
-      "th, td { border: 1px solid #ccc; padding: 5px; text-align:left; font-size: 0.9em; }"
+      "th, td { border: 1px solid #ccc; padding: 5px; text-align:left; font-size:0.9em; }"
       "th { background-color:#eee; }"
       ".section-title { font-weight:bold; font-size:1.1em; margin-top:20px; }"
       ".message-block { border:1px solid #ccc; margin:5px 0; padding:8px; border-radius:4px; }"
